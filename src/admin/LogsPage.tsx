@@ -25,6 +25,7 @@ import {
 import * as api from "./api";
 import { ConfirmModal } from "./ConfirmModal";
 import { useToast } from "@/components/ToastContext";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 import { useLogScroller } from "./useLogScroller";
 import { useRuntimeLogs } from "./useRuntimeLogs";
 import {
@@ -356,6 +357,10 @@ export function LogsPage() {
     showRawLogs,
     fullscreen: fullscreenActive,
   });
+  useNativeBackHandler(fullscreenActive, () => {
+    prepareViewportTransition();
+    setFullscreen(false);
+  }, "fullscreen");
 
   useEffect(() => {
     try {

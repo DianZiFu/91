@@ -8,6 +8,7 @@ import { useAuth } from "@/admin/AuthContext";
 import { UploadIcon } from "@/components/icons/UploadIcon";
 import { VideoIcon } from "@/components/icons/VideoIcon";
 import { requestShortsFullscreen } from "@/shorts/fullscreen";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 
 // Font Awesome Free 7.3.1 by Fonticons, Inc. — https://fontawesome.com/license/free
 function ShortVideoIcon({ size = 16 }: { size?: number }) {
@@ -80,6 +81,7 @@ export function MainNav() {
   const menuRef = useRef<HTMLUListElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
   const { status, isAdmin, logout } = useAuth();
+  useNativeBackHandler(open, () => setOpen(false), "menu");
 
   const items = isAdmin ? [...navItems, uploadNavItem, adminNavItem] : navItems;
 

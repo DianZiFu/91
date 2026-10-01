@@ -422,11 +422,11 @@ test("mobile collection uses native close requests with a history fallback", () 
   );
   assert.match(
     componentSource,
-    /if \(getCloseWatcher\(\)\) \{\s*setNativeOpenKey\(location\.key\);\s*return;/
+    /if \(supportsNativeBack\(\)\) \{\s*setNativeOpenKey\(location\.key\);\s*return;/
   );
   assert.match(
     componentSource,
-    /if \(!historyOpen && CloseWatcher\) \{[\s\S]*?new CloseWatcher\(\)[\s\S]*?watcher\.addEventListener\("close", \(\) => closeSheet\(\)\)[\s\S]*?watcher\.destroy\(\)/
+    /useNativeBackHandler\(open, \(\) => closeSheet\(true, false\)\)/
   );
   assert.match(
     componentSource,

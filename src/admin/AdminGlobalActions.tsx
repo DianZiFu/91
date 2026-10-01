@@ -5,6 +5,7 @@ import { applyTheme, getCurrentTheme } from "@/lib/theme";
 import * as api from "./api";
 import type { Theme } from "./api";
 import { useToast } from "@/components/ToastContext";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 
 type ThemeOption = {
   id: Theme;
@@ -45,6 +46,10 @@ export function AdminGlobalActions({
   const [activeTheme, setActiveTheme] = useState<Theme>(getCurrentTheme());
   const [loadingTheme, setLoadingTheme] = useState(true);
   const [savingTheme, setSavingTheme] = useState<Theme | null>(null);
+  useNativeBackHandler(themeMenuOpen, () => {
+    setThemeMenuOpen(false);
+    themeTriggerRef.current?.focus();
+  }, "menu");
 
   useEffect(() => {
     let mounted = true;

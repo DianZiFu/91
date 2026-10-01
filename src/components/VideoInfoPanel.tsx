@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Pencil, Tag, X } from "lucide-react";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 import type { TagItem, VideoDetail } from "@/types";
 
 type Props = {
@@ -41,6 +42,9 @@ export function VideoInfoPanel({
   const tagEditorRef = useRef<HTMLDivElement | null>(null);
 
   useDocumentScrollLock(editingTags);
+  useNativeBackHandler(editingTags, () => {
+    if (!tagSaving) closeTagEditor();
+  });
 
   const tags = video.tags ?? [];
   const description = (video.description ?? "").trim();

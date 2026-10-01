@@ -51,3 +51,22 @@ test("direct loads, unknown history and stale async handlers cannot guess a back
   assert.equal(history.backDelta("unknown", "list"), null);
   assert.equal(history.backDelta("unknown", "unknown"), null);
 });
+
+test("native back is available only for the current entry with an observed predecessor", () => {
+  const history = new NavigationHistory();
+  assert.equal(history.canGoBack("home"), false);
+  history.record("home", "POP");
+  assert.equal(history.canGoBack("home"), false);
+  history.record("video", "PUSH");
+  assert.equal(history.canGoBack("video"), true);
+  assert.equal(history.canGoBack("home"), false);
+  history.record("replacement", "REPLACE");
+  assert.equal(history.canGoBack("replacement"), true);
+  assert.equal(history.canGoBack("video"), false);
+  history.record("home", "POP");
+  assert.equal(history.canGoBack("home"), false);
+  history.record("replacement", "POP");
+  assert.equal(history.canGoBack("replacement"), true);
+  history.record("reloaded-video", "POP");
+  assert.equal(history.canGoBack("reloaded-video"), false);
+});

@@ -23,6 +23,8 @@ import {
   TOUCH_PREVIEW_DELAY_MS,
 } from "@/lib/previewIntent";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { supportsNativeBack } from "@/lib/nativeBack";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 import { useInViewport } from "@/lib/useInViewport";
 import { useIsActivePreview, usePreviewEnabled } from "@/lib/useIsActivePreview";
 import { useLazyVideoCollection } from "@/lib/useLazyVideoCollection";
@@ -41,15 +43,6 @@ type Props = {
   videoId: string;
   collection: VideoCollectionSummary;
 };
-
-// TypeScript's DOM declarations do not yet include this browser API.
-type SheetCloseWatcher = EventTarget & { destroy(): void };
-type SheetCloseWatcherConstructor = new () => SheetCloseWatcher;
-
-function getCloseWatcher(): SheetCloseWatcherConstructor | undefined {
-  return (window as Window & { CloseWatcher?: SheetCloseWatcherConstructor })
-    .CloseWatcher;
-}
 
 type SheetDragState = {
   active: boolean;
@@ -145,6 +138,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
   );
 
   useDocumentScrollLock(open);
+  useNativeBackHandler(open, () => closeSheet(true, false));
 
   useEffect(() => {
     return () => {
@@ -176,18 +170,6 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
     if (!open) return;
 
     const focusTimer = window.setTimeout(() => closeRef.current?.focus(), 0);
-    // A native close request consumes Android back before Chrome starts a
-    // history-navigation animation. Do not add a history entry in this mode.
-    const CloseWatcher = getCloseWatcher();
-    if (!historyOpen && CloseWatcher) {
-      const watcher = new CloseWatcher();
-      watcher.addEventListener("close", () => closeSheet());
-      return () => {
-        window.clearTimeout(focusTimer);
-        watcher.destroy();
-      };
-    }
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
@@ -350,7 +332,7 @@ export function MobileVideoCollection({ videoId, collection }: Props) {
 
   function openSheet() {
     if (open) return;
-    if (getCloseWatcher()) {
+    if (supportsNativeBack()) {
       setNativeOpenKey(location.key);
       return;
     }

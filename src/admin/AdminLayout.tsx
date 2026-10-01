@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 import "@/styles/admin-controls.css";
 import "@/styles/admin.css";
 import {
@@ -97,6 +98,10 @@ export function AdminLayout() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<api.UpdateCheck | null>(null);
+  useNativeBackHandler(mobileNavigationOpen, () => {
+    setMobileNavigationOpen(false);
+    window.requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+  }, "menu");
 
   useAdminPageModulePreload(location.pathname);
   useSyncTelegramAvailability(location.pathname);

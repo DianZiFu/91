@@ -35,6 +35,7 @@ import {
 } from "@/data/videos";
 import { useAuth } from "@/admin/AuthContext";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 import { resolveVideoReturnPath } from "@/lib/videoReturnPath";
 import { readVideoListingBackground } from "@/lib/videoListingBackground";
 import { navigationHistory } from "@/lib/navigationHistory";
@@ -193,6 +194,7 @@ function VideoDetailContent({ id }: { id?: string }) {
   >(null);
 
   useDocumentScrollLock(deleteOpen && isAdmin);
+  useNativeBackHandler(deleteOpen && isAdmin, handleCloseDelete);
 
   useEffect(() => {
     if (!id) {

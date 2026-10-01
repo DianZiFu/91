@@ -31,6 +31,33 @@ export class NavigationHistory {
   isCurrent(key: string): boolean {
     return this.keys[this.index] === key;
   }
+
+  canGoBack(key: string): boolean {
+    return this.isCurrent(key) && this.index > 0;
+  }
 }
 
 export const navigationHistory = new NavigationHistory();
+
+type RouterHistoryState = {
+  location: { key: string };
+  historyAction: "POP" | "PUSH" | "REPLACE";
+};
+
+type ObservableRouterHistory = {
+  state: RouterHistoryState;
+  subscribe(listener: (state: RouterHistoryState) => void): () => void;
+};
+
+/** Record every committed router transition before React can batch renders.
+ * Replace-then-push flows must retain the intermediate replacement entry. */
+export function observeNavigationHistory(
+  router: ObservableRouterHistory,
+  history = navigationHistory
+) {
+  const record = (state: RouterHistoryState) => {
+    history.record(state.location.key, state.historyAction);
+  };
+  record(router.state);
+  return router.subscribe(record);
+}

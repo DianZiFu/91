@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, type MouseEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { routeToPath } from "@/lib/videoReturnPath";
-import { exitShortsFullscreen, isShortsFullscreen } from "./fullscreen";
+import { exitShortsFullscreen } from "./fullscreen";
 import { useShortsFullscreen } from "./useShortsFullscreen";
 
 type ShortsPlaybackMode = "normal" | "clear";
-type CloseWatcherConstructor = new () => EventTarget & { destroy(): void };
 
 /**
  * 将返回顺序表达为路由历史：首页 → 正常播放 → 清屏播放。
@@ -77,25 +76,6 @@ export function useShortsNavigation() {
     navigatingRef.current = true;
     void exitShortsFullscreen().then(() => navigate(destination));
   }, [navigate]);
-
-  useEffect(() => {
-    if (!ready || fullscreen.isFullscreen || navigatingRef.current) return;
-    // Android 的原生返回请求与浏览器历史返回采用同一条路径；不支持
-    // CloseWatcher 的浏览器仍可直接通过上面的历史层级返回。
-    const CloseWatcher = (window as Window & { CloseWatcher?: CloseWatcherConstructor }).CloseWatcher;
-    if (!CloseWatcher) return;
-    const watcher = new CloseWatcher();
-    watcher.addEventListener("close", () => {
-      if (navigatingRef.current) return;
-      if (isShortsFullscreen()) {
-        void exitShortsFullscreen();
-      } else {
-        navigatingRef.current = true;
-        navigate(-1);
-      }
-    });
-    return () => watcher.destroy();
-  }, [fullscreen.isFullscreen, location.key, navigate, ready]);
 
   return { ready, clearScreen, setClearScreen, handleBackToHomeClick, handleRouteClick, ...fullscreen };
 }

@@ -1,12 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router";
+import { createBrowserRouter, RouterProvider } from "react-router";
 import App from "./App";
 import { ToastProvider } from "@/components/ToastContext";
 import { AuthProvider } from "./admin/AuthContext";
 import { syncThemeFromServer } from "./lib/theme";
 import { initializeListingScrollRestore } from "./lib/listingScrollRestore";
 import { initializeControlFocus } from "./lib/controlFocus";
+import { observeNavigationHistory } from "./lib/navigationHistory";
 
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -25,14 +26,22 @@ syncThemeFromServer();
 initializeListingScrollRestore(window);
 initializeControlFocus(document);
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <BrowserRouter>
+const router = createBrowserRouter([
+  {
+    path: "*",
+    element: (
       <ToastProvider>
         <AuthProvider>
           <App />
         </AuthProvider>
       </ToastProvider>
-    </BrowserRouter>
+    ),
+  },
+]);
+observeNavigationHistory(router);
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <RouterProvider router={router} />
   </React.StrictMode>
 );

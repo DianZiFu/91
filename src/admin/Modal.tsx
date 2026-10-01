@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
+import { useNativeBackHandler } from "@/lib/useNativeBack";
 import { useAdminRouteActive } from "./AdminRouteCache";
 
 type Props = {
@@ -33,6 +34,11 @@ export function Modal({
   const visible = open && routeActive;
 
   useDocumentScrollLock(visible);
+  useNativeBackHandler(visible, () => {
+    const dialog = dialogRef.current;
+    if (!dialog || !isTopDialog(dialog)) return false;
+    onCloseRef.current();
+  });
 
   useEffect(() => {
     onCloseRef.current = onClose;
