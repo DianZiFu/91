@@ -80,9 +80,11 @@
   transition: background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.search-panel__submit:hover {
-  filter: brightness(1.05);
-  box-shadow: 0 8px 20px var(--accent-glow), var(--shadow-inset);
+@media (hover: hover) and (pointer: fine) {
+  .search-panel__submit:hover {
+    filter: brightness(1.05);
+    box-shadow: 0 8px 20px var(--accent-glow), var(--shadow-inset);
+  }
 }
 
 .search-panel__submit:active {
@@ -253,11 +255,12 @@
   font-size: var(--font-sm);
   font-weight: var(--weight-medium);
   border: 1px solid var(--border-subtle);
+  -webkit-tap-highlight-color: transparent;
   transition: color var(--transition-fast), background var(--transition-fast),
     border-color var(--transition-fast);
 }
 
-.tag-chip:hover {
+.tag-chip:active {
   color: var(--accent);
   border-color: var(--border-accent);
   background: var(--accent-softer);
@@ -270,10 +273,19 @@
   box-shadow: 0 4px 12px var(--accent-glow);
 }
 
-.tag-chip.is-active:hover {
-  color: var(--text-on-accent);
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+/* Touch browsers can retain :hover after a tap and while returning in history. */
+@media (hover: hover) and (pointer: fine) {
+  .tag-chip:hover {
+    color: var(--accent);
+    border-color: var(--border-accent);
+    background: var(--accent-softer);
+  }
+
+  .tag-chip.is-active:hover {
+    color: var(--text-on-accent);
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
 }
 
 .tag-chip--placeholder {
@@ -329,8 +341,10 @@
   font-size: inherit;
 }
 
-.tag-cloud__retry:hover {
-  color: var(--accent-hover);
+@media (hover: hover) and (pointer: fine) {
+  .tag-cloud__retry:hover {
+    color: var(--accent-hover);
+  }
 }
 
 .tag-cloud__retry:focus-visible {

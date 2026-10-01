@@ -73,10 +73,10 @@ test("desktop share button matches the like button without changing narrow scree
   );
 });
 
-test("touch devices do not retain the share button hover highlight", () => {
+test("share success feedback remains independent of hover", () => {
   assert.match(
     detailCss,
-    /@media \(hover:\s*none\) and \(pointer:\s*coarse\)\s*\{[\s\S]*?\.vd-actions__share:not\(\.is-success\):hover:not\(:disabled\)\s*\{[^}]*background:\s*transparent[^}]*border-color:\s*var\(--border-subtle\)[^}]*color:\s*var\(--text-muted\)/s
+    /\.vd-actions__share\.is-success\s*\{[^}]*background:\s*var\(--success-soft\)[^}]*color:\s*var\(--success\)/s
   );
 });
 

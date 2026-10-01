@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
+import { createPlayerHoverStylesPlugin } from "./scripts/hoverStyles.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,7 +79,9 @@ function precompressBuildAssets(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), hashedAssetCachePlugin(), precompressBuildAssets()],
+  plugins: [react(), createPlayerHoverStylesPlugin(), hashedAssetCachePlugin(), precompressBuildAssets()],
+  // Keep the player's module visible to the style adapter during development.
+  optimizeDeps: { exclude: ["artplayer"] },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

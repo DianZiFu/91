@@ -424,8 +424,10 @@
   color: rgba(255, 255, 255, 0.92);
 }
 
-.video-player__error button:hover {
-  filter: brightness(1.08);
+@media (hover: hover) and (pointer: fine) {
+  .video-player__error button:hover {
+    filter: brightness(1.08);
+  }
 }
 
 .video-player__error {
@@ -882,8 +884,10 @@
   gap: var(--space-2);
 }
 
-.vd-actions__group:hover {
-  background: transparent;
+@media (hover: hover) and (pointer: fine) {
+  .vd-actions__group:hover {
+    background: transparent;
+  }
 }
 
 .vd-actions__group:focus-within {
@@ -977,10 +981,12 @@
   transition: all var(--transition-fast);
 }
 
-.vd-actions__btn:hover:not(:disabled) {
-  background: var(--accent-softer);
-  border-color: var(--border-accent);
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .vd-actions__btn:hover:not(:disabled) {
+    background: var(--accent-softer);
+    border-color: var(--border-accent);
+    color: var(--accent);
+  }
 }
 
 .vd-actions__btn:focus-visible {
@@ -997,25 +1003,25 @@
   margin-left: auto;
 }
 
-.vd-actions__delete:hover:not(:disabled) {
-  background: var(--danger-soft);
-  border-color: rgba(241, 85, 108, 0.35);
-  color: var(--danger);
+@media (hover: hover) and (pointer: fine) {
+  .vd-actions__delete:hover:not(:disabled) {
+    background: var(--danger-soft);
+    border-color: rgba(241, 85, 108, 0.35);
+    color: var(--danger);
+  }
 }
 
-.vd-actions__share.is-success,
-.vd-actions__share.is-success:hover:not(:disabled) {
+.vd-actions__share.is-success {
   background: var(--success-soft);
   border-color: color-mix(in srgb, var(--success) 42%, transparent);
   color: var(--success);
 }
 
-/* 触屏浏览器会把 :hover 保留到下一次点击，避免分享按钮因此持续高亮。 */
-@media (hover: none) and (pointer: coarse) {
-  .vd-actions__share:not(.is-success):hover:not(:disabled) {
-    background: transparent;
-    border-color: var(--border-subtle);
-    color: var(--text-muted);
+@media (hover: hover) and (pointer: fine) {
+  .vd-actions__share.is-success:hover:not(:disabled) {
+    background: var(--success-soft);
+    border-color: color-mix(in srgb, var(--success) 42%, transparent);
+    color: var(--success);
   }
 }
 
@@ -1026,10 +1032,12 @@
     color: var(--text-default);
   }
 
-  .vd-actions__share:not(.is-success):hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: var(--border-strong);
-    color: var(--text-strong);
+  @media (hover: hover) and (pointer: fine) {
+    .vd-actions__share:not(.is-success):hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: var(--border-strong);
+      color: var(--text-strong);
+    }
   }
 }
 
@@ -1181,9 +1189,11 @@
   transition: all var(--transition-fast);
 }
 
-.vd-delete-action:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .vd-delete-action:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    color: var(--text-strong);
+  }
 }
 
 .vd-delete-action:focus-visible {
@@ -1202,11 +1212,13 @@
   color: #fff;
 }
 
-.vd-delete-confirm:hover:not(:disabled) {
-  border-color: var(--danger);
-  background: var(--danger);
-  color: #fff;
-  filter: brightness(1.04);
+@media (hover: hover) and (pointer: fine) {
+  .vd-delete-confirm:hover:not(:disabled) {
+    border-color: var(--danger);
+    background: var(--danger);
+    color: #fff;
+    filter: brightness(1.04);
+  }
 }
 
 /* ---------- Info card (description + tags) ---------- */
@@ -1221,8 +1233,10 @@
   box-shadow: var(--shadow-sm);
 }
 
-.vd-info:hover {
-  border-color: var(--border-default);
+@media (hover: hover) and (pointer: fine) {
+  .vd-info:hover {
+    border-color: var(--border-default);
+  }
 }
 
 :root[data-theme="pink"] .vd-info {
@@ -1269,8 +1283,10 @@
   cursor: pointer;
 }
 
-.vd-info__desc.is-clickable:hover {
-  background: var(--accent-softer);
+@media (hover: hover) and (pointer: fine) {
+  .vd-info__desc.is-clickable:hover {
+    background: var(--accent-softer);
+  }
 }
 
 .vd-info__desc.is-clickable:focus-visible {
@@ -1334,10 +1350,12 @@
   user-select: none;
 }
 
-.vd-tag:hover {
-  background: var(--accent-soft);
-  border-color: var(--border-accent);
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .vd-tag:hover {
+    background: var(--accent-soft);
+    border-color: var(--border-accent);
+    color: var(--accent);
+  }
 }
 
 .vd-info__tags-edit {
@@ -1358,11 +1376,13 @@
   transition: all var(--transition-fast);
 }
 
-.vd-info__tags-edit:hover {
-  border-style: solid;
-  border-color: var(--border-accent);
-  color: var(--accent);
-  background: var(--accent-softer);
+@media (hover: hover) and (pointer: fine) {
+  .vd-info__tags-edit:hover {
+    border-style: solid;
+    border-color: var(--border-accent);
+    color: var(--accent);
+    background: var(--accent-softer);
+  }
 }
 
 .vd-info__tags-edit:focus-visible {
@@ -1423,9 +1443,11 @@
   transition: all var(--transition-fast);
 }
 
-.vd-tag-editor__close:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .vd-tag-editor__close:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-strong);
+  }
 }
 
 .vd-tag-editor__close:disabled,
@@ -1488,9 +1510,11 @@
   user-select: none;
 }
 
-.vd-tag-editor__chip:hover:not(:disabled) {
-  background: var(--accent-softer);
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .vd-tag-editor__chip:hover:not(:disabled) {
+    background: var(--accent-softer);
+    color: var(--text-strong);
+  }
 }
 
 .vd-tag-editor__chip.is-active {
@@ -1535,9 +1559,11 @@
   transition: all var(--transition-fast);
 }
 
-.vd-tag-editor__btn:hover:not(:disabled) {
-  background: var(--accent-softer);
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .vd-tag-editor__btn:hover:not(:disabled) {
+    background: var(--accent-softer);
+    color: var(--text-strong);
+  }
 }
 
 .vd-tag-editor__btn:focus-visible {
@@ -1550,8 +1576,10 @@
   color: var(--text-on-accent);
 }
 
-.vd-tag-editor__btn.is-primary:hover:not(:disabled) {
-  filter: brightness(1.06);
+@media (hover: hover) and (pointer: fine) {
+  .vd-tag-editor__btn.is-primary:hover:not(:disabled) {
+    filter: brightness(1.06);
+  }
 }
 
 .vd-tag-editor__btn:disabled {
@@ -2556,9 +2584,11 @@
   cursor: pointer;
 }
 
-.vd-empty__retry:hover {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+@media (hover: hover) and (pointer: fine) {
+  .vd-empty__retry:hover {
+    border-color: var(--accent-hover);
+    background: var(--accent-hover);
+  }
 }
 
 .vd-empty__retry:focus-visible {

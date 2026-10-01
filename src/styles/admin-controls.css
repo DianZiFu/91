@@ -81,9 +81,11 @@
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.admin-password-input__toggle:hover {
-  background: var(--accent-soft);
-  color: var(--text-default);
+@media (hover: hover) and (pointer: fine) {
+  .admin-password-input__toggle:hover {
+    background: var(--accent-soft);
+    color: var(--text-default);
+  }
 }
 
 .admin-password-input__toggle:focus-visible {
@@ -115,11 +117,13 @@
   overflow-wrap: anywhere;
 }
 
-.admin-btn:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-surface);
-  color: var(--text-strong);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+@media (hover: hover) and (pointer: fine) {
+  .admin-btn:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    background: var(--bg-surface);
+    color: var(--text-strong);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  }
 }
 
 .admin-btn:focus-visible {
@@ -139,12 +143,14 @@
   box-shadow: none;
 }
 
-.admin-btn.is-primary:hover:not(:disabled) {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
-  color: var(--text-on-accent);
-  filter: none;
-  box-shadow: none;
+@media (hover: hover) and (pointer: fine) {
+  .admin-btn.is-primary:hover:not(:disabled) {
+    border-color: var(--accent-hover);
+    background: var(--accent-hover);
+    color: var(--text-on-accent);
+    filter: none;
+    box-shadow: none;
+  }
 }
 
 .admin-btn:disabled {

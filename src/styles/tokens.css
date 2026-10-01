@@ -273,8 +273,10 @@
 :root[data-theme="pink"] ::-webkit-scrollbar-thumb {
   background: rgba(180, 90, 120, 0.22);
 }
-:root[data-theme="pink"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(180, 90, 120, 0.36);
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="pink"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(180, 90, 120, 0.36);
+  }
 }
 :root[data-theme="pink"] * {
   scrollbar-color: rgba(180, 90, 120, 0.28) transparent;
@@ -379,8 +381,10 @@
 :root[data-theme="sky"] ::-webkit-scrollbar-thumb {
   background: rgba(60, 100, 170, 0.22);
 }
-:root[data-theme="sky"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(60, 100, 170, 0.36);
+@media (hover: hover) and (pointer: fine) {
+  :root[data-theme="sky"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(60, 100, 170, 0.36);
+  }
 }
 :root[data-theme="sky"] * {
   scrollbar-color: rgba(60, 100, 170, 0.28) transparent;
@@ -465,17 +469,19 @@
     border-color: rgba(255, 255, 255, 0.08);
   }
 
-  :root .admin-nav__link:hover,
-  :root[data-theme="dark"] .admin-nav__link:hover {
-    background: rgba(255, 255, 255, 0.055);
-    border-color: rgba(255, 138, 60, 0.065);
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
-  }
+  @media (hover: hover) and (pointer: fine) {
+    :root .admin-nav__link:hover,
+    :root[data-theme="dark"] .admin-nav__link:hover {
+      background: rgba(255, 255, 255, 0.055);
+      border-color: rgba(255, 138, 60, 0.065);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+    }
 
-  :root .admin-nav__link:hover .admin-nav__icon,
-  :root[data-theme="dark"] .admin-nav__link:hover .admin-nav__icon {
-    background: rgba(255, 255, 255, 0.085);
-    border-color: rgba(255, 255, 255, 0.13);
+    :root .admin-nav__link:hover .admin-nav__icon,
+    :root[data-theme="dark"] .admin-nav__link:hover .admin-nav__icon {
+      background: rgba(255, 255, 255, 0.085);
+      border-color: rgba(255, 255, 255, 0.13);
+    }
   }
 
   :root .admin-nav__link.is-active,
@@ -503,15 +509,17 @@
     border-color: rgba(255, 91, 138, 0.12);
   }
 
-  :root[data-theme="pink"] .admin-nav__link:hover {
-    background: rgba(255, 255, 255, 0.42);
-    border-color: rgba(255, 91, 138, 0.16);
-    box-shadow: 0 8px 22px rgba(180, 90, 120, 0.08);
-  }
+  @media (hover: hover) and (pointer: fine) {
+    :root[data-theme="pink"] .admin-nav__link:hover {
+      background: rgba(255, 255, 255, 0.42);
+      border-color: rgba(255, 91, 138, 0.16);
+      box-shadow: 0 8px 22px rgba(180, 90, 120, 0.08);
+    }
 
-  :root[data-theme="pink"] .admin-nav__link:hover .admin-nav__icon {
-    background: rgba(255, 255, 255, 0.58);
-    border-color: rgba(255, 91, 138, 0.2);
+    :root[data-theme="pink"] .admin-nav__link:hover .admin-nav__icon {
+      background: rgba(255, 255, 255, 0.58);
+      border-color: rgba(255, 91, 138, 0.2);
+    }
   }
 
   :root[data-theme="pink"] .admin-nav__link.is-active {
@@ -536,15 +544,17 @@
     border-color: rgba(60, 100, 170, 0.12);
   }
 
-  :root[data-theme="sky"] .admin-nav__link:hover {
-    background: rgba(255, 255, 255, 0.26);
-    border-color: rgba(60, 100, 170, 0.14);
-    box-shadow: 0 8px 22px rgba(40, 80, 160, 0.08);
-  }
+  @media (hover: hover) and (pointer: fine) {
+    :root[data-theme="sky"] .admin-nav__link:hover {
+      background: rgba(255, 255, 255, 0.26);
+      border-color: rgba(60, 100, 170, 0.14);
+      box-shadow: 0 8px 22px rgba(40, 80, 160, 0.08);
+    }
 
-  :root[data-theme="sky"] .admin-nav__link:hover .admin-nav__icon {
-    background: rgba(255, 255, 255, 0.42);
-    border-color: rgba(60, 100, 170, 0.18);
+    :root[data-theme="sky"] .admin-nav__link:hover .admin-nav__icon {
+      background: rgba(255, 255, 255, 0.42);
+      border-color: rgba(60, 100, 170, 0.18);
+    }
   }
 
   :root[data-theme="sky"] .admin-nav__link.is-active {

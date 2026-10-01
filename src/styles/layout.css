@@ -136,8 +136,10 @@
   transition: color var(--transition-fast);
 }
 
-.content-tabs__tab:hover:not(:disabled) {
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .content-tabs__tab:hover:not(:disabled) {
+    color: var(--text-strong);
+  }
 }
 
 .content-tabs__tab[aria-selected="true"] {
@@ -253,10 +255,12 @@
     box-shadow var(--transition-fast);
 }
 
-.promo-card:hover {
-  border-color: var(--border-accent);
-  box-shadow: var(--shadow-md);
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .promo-card:hover {
+    border-color: var(--border-accent);
+    box-shadow: var(--shadow-md);
+    color: var(--text-strong);
+  }
 }
 
 .promo-card__label {
@@ -312,8 +316,10 @@
   transform: translateY(0);
 }
 
-.back-to-top:hover {
-  filter: brightness(1.05);
+@media (hover: hover) and (pointer: fine) {
+  .back-to-top:hover {
+    filter: brightness(1.05);
+  }
 }
 
 .home-refresh {
@@ -338,8 +344,10 @@
   bottom: 80px;
 }
 
-.home-refresh:hover {
-  filter: brightness(1.05);
+@media (hover: hover) and (pointer: fine) {
+  .home-refresh:hover {
+    filter: brightness(1.05);
+  }
 }
 
 .home-refresh:disabled {
@@ -396,8 +404,10 @@
   font-size: var(--font-sm);
 }
 
-.footer__links a:hover {
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .footer__links a:hover {
+    color: var(--accent);
+  }
 }
 
 /* =========================================================
@@ -434,8 +444,10 @@
     box-shadow var(--transition-fast);
 }
 
-.upload-mode-switch button:hover {
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .upload-mode-switch button:hover {
+    color: var(--text-strong);
+  }
 }
 
 .upload-mode-switch button.is-active {
@@ -461,10 +473,12 @@
     color var(--transition-fast);
 }
 
-.upload-drop:hover {
-  border-color: var(--border-accent);
-  background: var(--accent-softer);
-  color: var(--text-default);
+@media (hover: hover) and (pointer: fine) {
+  .upload-drop:hover {
+    border-color: var(--border-accent);
+    background: var(--accent-softer);
+    color: var(--text-default);
+  }
 }
 
 .upload-drop input {
@@ -572,9 +586,11 @@
     color var(--transition-fast);
 }
 
-.upload-tag:hover {
-  border-color: var(--border-accent);
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .upload-tag:hover {
+    border-color: var(--border-accent);
+    color: var(--accent);
+  }
 }
 
 .upload-tag.is-active {
@@ -632,10 +648,12 @@
   font-size: var(--font-md);
 }
 
-.upload-submit:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-surface);
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .upload-submit:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    background: var(--bg-surface);
+    color: var(--text-strong);
+  }
 }
 
 .upload-submit:disabled {
@@ -794,9 +812,11 @@
   font-weight: var(--weight-semibold);
 }
 
-.remote-upload-cancel:hover:not(:disabled) {
-  border-color: rgba(241, 85, 108, 0.5);
-  color: var(--danger);
+@media (hover: hover) and (pointer: fine) {
+  .remote-upload-cancel:hover:not(:disabled) {
+    border-color: rgba(241, 85, 108, 0.5);
+    color: var(--danger);
+  }
 }
 
 .remote-upload-cancel:disabled {
@@ -809,9 +829,11 @@
   color: var(--accent);
 }
 
-.remote-upload-detail:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .remote-upload-detail:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
 }
 
 /* =========================================================

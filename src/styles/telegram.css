@@ -44,8 +44,10 @@
   text-underline-offset: 3px;
   white-space: nowrap;
 }
-.tg-cancel-changes:hover:not(:disabled) {
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .tg-cancel-changes:hover:not(:disabled) {
+    color: var(--text-strong);
+  }
 }
 .tg-cancel-changes:disabled {
   opacity: 0.55;
@@ -117,9 +119,11 @@
   line-height: 1.6;
   text-decoration: none;
 }
-.tg-text-link:hover {
-  color: var(--text-strong);
-  text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+  .tg-text-link:hover {
+    color: var(--text-strong);
+    text-decoration: underline;
+  }
 }
 .tg-fields {
   display: grid;

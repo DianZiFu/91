@@ -123,8 +123,10 @@
   color: inherit;
 }
 
-.video-card__link:hover {
-  color: inherit;
+@media (hover: hover) and (pointer: fine) {
+  .video-card__link:hover {
+    color: inherit;
+  }
 }
 
 /* =========================================================
@@ -636,10 +638,12 @@
   font-weight: var(--weight-medium);
 }
 
-.listing-load-error button:hover,
-.listing-load-error-empty > button:hover {
-  border-color: var(--border-accent);
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .listing-load-error button:hover,
+  .listing-load-error-empty > button:hover {
+    border-color: var(--border-accent);
+    color: var(--accent);
+  }
 }
 
 .listing-load-error-empty {
@@ -786,10 +790,12 @@
   justify-content: center;
 }
 
-.pagination__btn:hover:not(:disabled) {
-  border-color: var(--border-accent);
-  color: var(--accent);
-  background: var(--accent-softer);
+@media (hover: hover) and (pointer: fine) {
+  .pagination__btn:hover:not(:disabled) {
+    border-color: var(--border-accent);
+    color: var(--accent);
+    background: var(--accent-softer);
+  }
 }
 
 .pagination__btn.is-active {

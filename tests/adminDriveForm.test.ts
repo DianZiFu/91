@@ -1076,7 +1076,11 @@ test("drive form modal uses flatter chrome", () => {
   );
   assert.match(
     adminCss,
-    /\.admin-modal--drive-form \.admin-drive-type-card:hover,[\s\S]*?\.admin-modal--drive-form \.admin-drive-type-card:active,[\s\S]*?\.admin-modal--drive-form \.admin-drive-type-card:focus-visible\s*\{[^}]*border-color\s*:\s*var\(--border-default\);[^}]*background\s*:\s*var\(--bg-surface\)/s
+    /\.admin-modal--drive-form \.admin-drive-type-card:active,[\s\S]*?\.admin-modal--drive-form \.admin-drive-type-card:focus-visible\s*\{[^}]*border-color\s*:\s*var\(--border-default\);[^}]*background\s*:\s*var\(--bg-surface\)/s
+  );
+  assert.match(
+    adminCss,
+    /@media \(hover:\s*hover\) and \(pointer:\s*fine\)\s*\{\s*\.admin-modal--drive-form \.admin-drive-type-card:hover\s*\{[^}]*border-color\s*:\s*var\(--border-default\);[^}]*background\s*:\s*var\(--bg-surface\)/s
   );
   assert.match(
     adminCss,

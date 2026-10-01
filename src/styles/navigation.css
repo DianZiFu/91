@@ -107,9 +107,11 @@
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.main-nav__link:hover {
-  color: var(--text-strong);
-  background: rgba(255, 255, 255, 0.04);
+@media (hover: hover) and (pointer: fine) {
+  .main-nav__link:hover {
+    color: var(--text-strong);
+    background: rgba(255, 255, 255, 0.04);
+  }
 }
 
 .main-nav__link.is-active {
@@ -144,9 +146,11 @@
   transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
 }
 
-.main-nav__toggle:hover {
-  background: transparent;
-  transform: scale(1.04);
+@media (hover: hover) and (pointer: fine) {
+  .main-nav__toggle:hover {
+    background: transparent;
+    transform: scale(1.04);
+  }
 }
 
 .main-nav__toggle:active {
@@ -179,8 +183,10 @@
   transition: color var(--transition-fast);
 }
 
-.sub-nav__item:hover {
-  color: var(--accent);
+@media (hover: hover) and (pointer: fine) {
+  .sub-nav__item:hover {
+    color: var(--accent);
+  }
 }
 
 /* ----- 响应式 ----- */

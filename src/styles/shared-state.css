@@ -161,9 +161,11 @@
   color: var(--text-muted);
 }
 
-.toast__close:hover {
-  background: var(--bg-surface);
-  color: var(--text-strong);
+@media (hover: hover) and (pointer: fine) {
+  .toast__close:hover {
+    background: var(--bg-surface);
+    color: var(--text-strong);
+  }
 }
 
 .toast.is-leaving {

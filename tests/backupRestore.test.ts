@@ -515,7 +515,11 @@ test("active backup cancellation uses the transparent ordinary button style", ()
   assert.doesNotMatch(page, /className="admin-btn is-stop" onClick=\{handleCancelBackup\}/);
   assert.match(
     css,
-    /\.admin-btn\.is-transparent,\s*\.admin-btn\.is-transparent:hover:not\(:disabled\)\s*\{[^}]*background:\s*transparent;/s
+    /\.admin-btn\.is-transparent\s*\{[^}]*background:\s*transparent;/s
+  );
+  assert.match(
+    css,
+    /@media \(hover:\s*hover\) and \(pointer:\s*fine\)\s*\{\s*\.admin-btn\.is-transparent:hover:not\(:disabled\)\s*\{[^}]*background:\s*transparent;/s
   );
 });
 
