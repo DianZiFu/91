@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,19 +15,15 @@ import (
 
 func TestCrawlerTimeoutKillsChildProcessTree(t *testing.T) {
 	pidFile := t.TempDir() + "/child.pid"
-	body := fmt.Sprintf(`
-sleep 30 &
-child=$!
-echo "$child" > %q
-sleep 30
+	body := fmt.Sprintf(`import subprocess
+child=subprocess.Popen(["sleep","30"])
+open(%q,"w").write(str(child.pid))
+time.sleep(30)
 `, pidFile)
-	crawler := newRuntimeTestCrawler(t, body, ProtocolV2, func(cfg *CrawlerConfig) {
-		cfg.IdleTimeout = 80 * time.Millisecond
-		cfg.CandidateIdleTimeout = time.Second
-	})
+	crawler := newRuntimeTestCrawler(t, body, ProtocolV3, func(cfg *CrawlerConfig) { cfg.OperationTimeout = 100 * time.Millisecond })
 	_, err := crawler.RunOnce(context.Background(), 1)
-	if err == nil || !strings.Contains(err.Error(), "heartbeat timeout") {
-		t.Fatalf("error = %v, want heartbeat timeout", err)
+	if err == nil {
+		t.Fatal("expected operation timeout")
 	}
 	data, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -44,27 +39,6 @@ sleep 30
 	}
 	if processIsRunning(pid) {
 		t.Fatalf("child process %d survived crawler termination", pid)
-	}
-}
-
-func TestExpectedKilledProcessDoesNotHideScriptExitFailure(t *testing.T) {
-	// terminated=true throughout: the wait status is authoritative on unix, so
-	// a script that failed on its own must stay visible even when the backend
-	// also issued a termination request.
-	failed := exec.Command("/bin/sh", "-c", "exit 7")
-	if err := failed.Run(); err == nil || isExpectedKilledProcess(err, true) {
-		t.Fatalf("ordinary non-zero exit = %v, must remain observable", err)
-	}
-
-	killed := exec.Command("/bin/sh", "-c", "sleep 30")
-	if err := killed.Start(); err != nil {
-		t.Fatalf("start killed process: %v", err)
-	}
-	if err := killed.Process.Kill(); err != nil {
-		t.Fatalf("kill process: %v", err)
-	}
-	if err := killed.Wait(); err == nil || !isExpectedKilledProcess(err, true) {
-		t.Fatalf("killed process = %v, want expected termination", err)
 	}
 }
 

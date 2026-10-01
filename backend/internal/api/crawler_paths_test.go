@@ -22,10 +22,15 @@ func TestCrawlerImportEditMoveAndDeleteUsePortableScriptReference(t *testing.T) 
 	}
 	defer cat.Close()
 	server := &AdminServer{Catalog: cat, LocalPreviewDir: filepath.Join(root, "data", "previews")}
-	script, err := server.saveCrawlerScript(context.Background(), "demo.py", strings.NewReader("CRAWLER_NAME = 'Portable crawler'\n"), 1024)
+	script, err := server.saveCrawlerScript(context.Background(), "demo.py", strings.NewReader("CRAWLER_NAME = 'Portable crawler'\nCRAWLER_PROTOCOL = 'crawler.v3'\n"), 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
+	reference, err := filepath.Rel(filepath.Join(root, "data", "crawler-scripts"), script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference = filepath.ToSlash(reference)
 	save := func(path string) *catalog.Drive {
 		t.Helper()
 		body, _ := json.Marshal(map[string]string{"id": "crawler", "scriptPath": path})
@@ -42,7 +47,7 @@ func TestCrawlerImportEditMoveAndDeleteUsePortableScriptReference(t *testing.T) 
 	}
 	for _, path := range []string{script, ""} {
 		drive := save(path)
-		if drive.Credentials["script_file"] != "demo.py" || drive.Credentials["script_path"] != "" {
+		if drive.Credentials["script_file"] != reference || drive.Credentials["script_path"] != "" {
 			t.Fatalf("stored imported script as an absolute path: %+v", drive.Credentials)
 		}
 	}
@@ -53,12 +58,12 @@ func TestCrawlerImportEditMoveAndDeleteUsePortableScriptReference(t *testing.T) 
 	server.LocalPreviewDir = filepath.Join(moved, "previews")
 	drive := save("")
 	dto := server.crawlerDTOForDrive(drive, catalog.CrawlerAssetCounts{}, DriveGenerationStatuses{})
-	movedScript := filepath.Join(moved, "crawler-scripts", "demo.py")
+	movedScript := filepath.Join(moved, "crawler-scripts", filepath.FromSlash(reference))
 	if dto.ScriptPath != movedScript || dto.Name != "Portable crawler" {
 		t.Fatalf("crawler after move = %+v", dto)
 	}
 	external := filepath.Join(root, "external.py")
-	if err := os.WriteFile(external, []byte("CRAWLER_NAME = 'External crawler'\n"), 0o600); err != nil {
+	if err := os.WriteFile(external, []byte("CRAWLER_NAME = 'External crawler'\nCRAWLER_PROTOCOL = 'crawler.v3'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	drive = save(external)
@@ -66,7 +71,7 @@ func TestCrawlerImportEditMoveAndDeleteUsePortableScriptReference(t *testing.T) 
 		t.Fatalf("switch to external retained imported reference: %+v", drive.Credentials)
 	}
 	drive = save(movedScript)
-	if drive.Credentials["script_file"] != "demo.py" || drive.Credentials["script_path"] != "" {
+	if drive.Credentials["script_file"] != reference || drive.Credentials["script_path"] != "" {
 		t.Fatalf("switch to imported retained external reference: %+v", drive.Credentials)
 	}
 	if removed, err := server.removeImportedCrawlerScript(drive); err != nil || !removed {

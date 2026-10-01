@@ -14,13 +14,13 @@ const (
 )
 
 const (
-	ProtocolV1 = "crawler.v1"
-	ProtocolV2 = "crawler.v2"
+	ProtocolV3 = "crawler.v3"
 )
 
 type Metadata struct {
 	Name     string `json:"name"`
 	Protocol string `json:"protocol"`
+	Feeds    []Feed `json:"feeds"`
 }
 
 func ReadMetadata(scriptPath string) (Metadata, error) {
@@ -42,8 +42,9 @@ func ExtractMetadata(source string) (Metadata, error) {
 	lines := strings.Split(source, "\n")
 	preamble := min(len(lines), maxMetadataPreambleLines)
 
-	meta := Metadata{Protocol: ProtocolV1}
+	meta := Metadata{Feeds: []Feed{{ID: "default", Label: "默认", Default: true}}}
 	foundName := false
+	foundFeeds := false
 	tripleQuote := ""
 	for _, line := range lines[:preamble] {
 		key, value, ok := moduleLevelMetadataAssignment(line, &tripleQuote)
@@ -51,6 +52,20 @@ func ExtractMetadata(source string) (Metadata, error) {
 			continue
 		}
 		switch key {
+		case "CRAWLER_FEEDS":
+			if foundFeeds {
+				return Metadata{}, errors.New("CRAWLER_FEEDS 只能声明一次")
+			}
+			literal, ok := parsePythonStringLiteral(value)
+			if !ok {
+				return Metadata{}, errors.New("CRAWLER_FEEDS 必须是单行 JSON 字符串字面量")
+			}
+			feeds, err := parseFeeds(literal)
+			if err != nil {
+				return Metadata{}, err
+			}
+			meta.Feeds = feeds
+			foundFeeds = true
 		case "CRAWLER_NAME":
 			name, ok := parsePythonStringLiteral(value)
 			if !ok {
@@ -68,11 +83,11 @@ func ExtractMetadata(source string) (Metadata, error) {
 		case "CRAWLER_PROTOCOL":
 			protocol, ok := parsePythonStringLiteral(value)
 			if !ok {
-				return Metadata{}, errors.New(`CRAWLER_PROTOCOL 必须是字符串字面量，例如 CRAWLER_PROTOCOL = "crawler.v2"`)
+				return Metadata{}, errors.New(`CRAWLER_PROTOCOL 必须是字符串字面量，例如 CRAWLER_PROTOCOL = "crawler.v3"`)
 			}
 			protocol = strings.TrimSpace(protocol)
-			if protocol != ProtocolV1 && protocol != ProtocolV2 {
-				return Metadata{}, fmt.Errorf("不支持的 CRAWLER_PROTOCOL %q，目前支持 %s 和 %s", protocol, ProtocolV1, ProtocolV2)
+			if protocol != ProtocolV3 {
+				return Metadata{}, fmt.Errorf("不支持的 CRAWLER_PROTOCOL %q，仅支持 %s，请升级脚本", protocol, ProtocolV3)
 			}
 			meta.Protocol = protocol
 		}
@@ -83,44 +98,35 @@ func ExtractMetadata(source string) (Metadata, error) {
 	if !foundName {
 		return Metadata{}, fmt.Errorf(`脚本必须在前 %d 行的模块顶层声明 CRAWLER_NAME，例如 CRAWLER_NAME = "示例爬虫"`, maxMetadataPreambleLines)
 	}
+	if meta.Protocol != ProtocolV3 {
+		return Metadata{}, fmt.Errorf("必须显式声明 CRAWLER_PROTOCOL = %q，旧协议不再支持", ProtocolV3)
+	}
 	return meta, nil
 }
 
-// rejectIgnoredMetadata guards the preamble cutoff. A declaration below the
-// cutoff is invisible to the scan above, so a script could silently run under
-// a protocol it did not ask for. Only declarations that would actually change
-// the outcome are rejected: legacy scripts keep computed assignments and
-// examples further down the file without failing the import.
+// Reject declarations that the bounded module preamble cannot validate.
 func rejectIgnoredMetadata(lines []string, tripleQuote *string, meta Metadata, foundName bool) error {
 	for _, line := range lines {
 		key, value, ok := moduleLevelMetadataAssignment(line, tripleQuote)
 		if !ok {
 			continue
 		}
-		literal, ok := parsePythonStringLiteral(value)
-		if !ok {
-			continue
+		if key == "CRAWLER_FEEDS" {
+			return fmt.Errorf("CRAWLER_FEEDS 必须在前 %d 行模块顶层声明，且只能声明一次", maxMetadataPreambleLines)
 		}
-		literal = strings.TrimSpace(literal)
-		switch key {
-		case "CRAWLER_NAME":
-			if foundName || literal == "" {
-				continue
-			}
-			return fmt.Errorf("CRAWLER_NAME 必须声明在脚本前 %d 行的模块顶层", maxMetadataPreambleLines)
-		case "CRAWLER_PROTOCOL":
-			if literal == meta.Protocol || (literal != ProtocolV1 && literal != ProtocolV2) {
-				continue
-			}
-			return fmt.Errorf("CRAWLER_PROTOCOL 必须声明在脚本前 %d 行的模块顶层，否则脚本会按 %s 运行",
-				maxMetadataPreambleLines, meta.Protocol)
+		literal, ok := parsePythonStringLiteral(value)
+		if key == "CRAWLER_PROTOCOL" && (!ok || literal != meta.Protocol) {
+			return fmt.Errorf("CRAWLER_PROTOCOL 必须在前 %d 行模块顶层声明，且只能为 %s", maxMetadataPreambleLines, ProtocolV3)
+		}
+		if key == "CRAWLER_NAME" && !foundName {
+			return fmt.Errorf("CRAWLER_NAME 必须在前 %d 行模块顶层声明", maxMetadataPreambleLines)
 		}
 	}
 	return nil
 }
 
-// moduleLevelMetadataAssignment reports a top-level CRAWLER_NAME /
-// CRAWLER_PROTOCOL assignment on one line, returning the raw right-hand side.
+// moduleLevelMetadataAssignment reports a top-level crawler metadata
+// assignment on one line, returning the raw right-hand side.
 // Indented assignments belong to a function or class body and are ignored, as
 // are comments and triple-quoted regions.
 func moduleLevelMetadataAssignment(line string, tripleQuote *string) (string, string, bool) {
@@ -132,7 +138,7 @@ func moduleLevelMetadataAssignment(line string, tripleQuote *string) (string, st
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 		return "", "", false
 	}
-	if !strings.HasPrefix(trimmed, "CRAWLER_NAME") && !strings.HasPrefix(trimmed, "CRAWLER_PROTOCOL") {
+	if !strings.HasPrefix(trimmed, "CRAWLER_") {
 		return "", "", false
 	}
 	left, right, ok := strings.Cut(trimmed, "=")
@@ -140,7 +146,7 @@ func moduleLevelMetadataAssignment(line string, tripleQuote *string) (string, st
 		return "", "", false
 	}
 	key := strings.TrimSpace(left)
-	if key != "CRAWLER_NAME" && key != "CRAWLER_PROTOCOL" {
+	if key != "CRAWLER_NAME" && key != "CRAWLER_PROTOCOL" && key != "CRAWLER_FEEDS" {
 		return "", "", false
 	}
 	return key, right, true

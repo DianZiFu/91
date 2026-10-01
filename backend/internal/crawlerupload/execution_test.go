@@ -32,6 +32,49 @@ func uploadTestSetup(t *testing.T) (*catalog.Catalog, *scriptcrawler.Driver, *fa
 	return cat, src, target, New(Config{Catalog: cat, Registry: reg})
 }
 
+func TestRunDriveWaitsForUploadSlotAndHonorsHardCancellation(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprint(stop), func(t *testing.T) {
+			cat, src, target, m := uploadTestSetup(t)
+			writeCrawlerVideo(t, cat, src, "waiting", ".mp4", []byte("payload"), true)
+			if !m.tryBeginRun() {
+				t.Fatal("could not reserve upload slot")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- m.RunDrive(ctx, src.ID()) }()
+			select {
+			case err := <-done:
+				t.Fatalf("completion rejected a busy upload slot: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			if stop {
+				cancel()
+				if err := <-done; !errors.Is(err, context.Canceled) {
+					t.Fatalf("waiting upload did not cancel: %v", err)
+				}
+				if !m.running || target.uploadCalls != 0 {
+					t.Fatal("canceled waiter released another run's slot or uploaded")
+				}
+				m.finishRun()
+			} else {
+				m.finishRun()
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+				if target.uploadCalls != 1 {
+					t.Fatalf("uploads=%d", target.uploadCalls)
+				}
+			}
+			if !m.tryBeginRun() {
+				t.Fatal("migration slot leaked")
+			}
+			m.finishRun()
+		})
+	}
+}
+
 func TestUploadIdleStatusExposesCurrentOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

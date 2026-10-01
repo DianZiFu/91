@@ -85,6 +85,8 @@ type AdminServer struct {
 	OnDriveDeleteCleanup           func(ctx context.Context, driveID string) (int, error)
 	OnDriveRemoved                 func(driveID string)
 	OnScanRequested                func(context.Context, string) bool
+	OnCrawlerRunRequested          func(context.Context, string) (string, error)
+	OnCrawlerTaskCancel            func(string, string) bool
 	OnCrawlerUploadRequested       func(driveID string) (bool, string)
 	OnStopDriveTasks               func(driveID string) bool
 	OnStopAllTasks                 func() int
@@ -269,6 +271,9 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Post("/crawlers/test-script", a.handleTestCrawlerScript)
 			r.Delete("/crawlers/{id}", a.handleDeleteCrawler)
 			r.Post("/crawlers/{id}/run", a.handleRunCrawler)
+			r.Get("/crawlers/{id}/tasks", a.handleListCrawlerTasks)
+			r.Get("/crawlers/{id}/tasks/{taskID}", a.handleGetCrawlerTask)
+			r.Post("/crawlers/{id}/tasks/{taskID}/cancel", a.handleCancelCrawlerTask)
 			r.Post("/crawlers/{id}/upload", a.handleUploadCrawlerVideos)
 			r.Post("/crawlers/{id}/paused", a.handleSetCrawlerPaused)
 			r.Post("/crawlers/{id}/tasks/stop", a.handleStopCrawlerTasks)

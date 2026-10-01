@@ -15,6 +15,8 @@ type Issue struct {
 }
 
 type Result struct {
+	ParentTaskID   string    `json:"parentTaskId,omitempty"`
+	AcceptedAt     time.Time `json:"acceptedAt"`
 	TaskID         string    `json:"taskId"`
 	DriveID        string    `json:"driveId"`
 	TargetDriveID  string    `json:"targetDriveId"`

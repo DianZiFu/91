@@ -95,6 +95,11 @@ func mergeSelectiveRestoreDatabase(
 		`DELETE FROM main.scans WHERE ` + driveSelection,
 		`DELETE FROM main.deleted_videos WHERE ` + driveSelection,
 		`DELETE FROM main.crawler_seen_sources WHERE ` + driveSelection,
+		`DELETE FROM main.crawler_discoveries WHERE ` + driveSelection,
+		`DELETE FROM main.crawler_tasks WHERE ` + driveSelection,
+		`DELETE FROM main.crawler_upload_tasks WHERE ` + driveSelection,
+		`DELETE FROM main.crawler_upload_results WHERE ` + driveSelection,
+
 		`DELETE FROM main.drives WHERE ` + driveIDSelection,
 	}
 	for _, statement := range clearStatements {
@@ -132,7 +137,7 @@ func mergeSelectiveRestoreDatabase(
 		rollback()
 		return err
 	}
-	for _, table := range []string{"scans", "deleted_videos", "crawler_seen_sources"} {
+	for _, table := range []string{"scans", "deleted_videos", "crawler_seen_sources", "crawler_discoveries", "crawler_tasks", "crawler_upload_tasks", "crawler_upload_results"} {
 		if err := copyCommonTableRows(ctx, tx, table, nil); err != nil {
 			rollback()
 			return err

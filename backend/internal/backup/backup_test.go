@@ -267,6 +267,7 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 	writeTestFile(t, filepath.Join(env.root, "previews", "framesigs", "video.fsig"), []byte("framesig"))
 	writeTestFile(t, filepath.Join(env.root, "uploads", "upload.mp4"), []byte("upload"))
 	writeTestFile(t, filepath.Join(env.root, "crawler-scripts", "crawler.py"), []byte("print('ok')"))
+	writeTestFile(t, filepath.Join(env.root, "crawler-scripts", "import-revision", "91Porn.py"), []byte("print('versioned script')"))
 	writeTestFile(t, filepath.Join(env.root, "scriptcrawlers", "demo", "videos", "crawl.mp4"), []byte("crawl"))
 	writeTestFile(t, filepath.Join(env.root, "spider91", "legacy.mp4"), []byte("legacy"))
 	writeTestFile(t, filepath.Join(env.root, "previews", "ignored.part"), []byte("partial"))
@@ -304,6 +305,7 @@ func TestFullBackupContainsPersistentFilesAndExcludesTemporaryData(t *testing.T)
 		"payload/previews/framesigs/video.fsig",
 		"payload/uploads/upload.mp4",
 		"payload/crawler-scripts/crawler.py",
+		"payload/crawler-scripts/import-revision/91Porn.py",
 		"payload/scriptcrawlers/demo/videos/crawl.mp4",
 		"payload/spider91/legacy.mp4",
 	} {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/crawljob"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/googledrive"
 	"github.com/video-site/backend/internal/drives/guangyapan"
@@ -162,7 +163,7 @@ type driveTaskAdmission struct {
 	generation uint64
 }
 
-type driveTaskAdmissionContextKey struct{}
+type driveTaskAdmissionContextKey struct{ gate *driveOperationGate }
 
 type driveOperationGate struct {
 	// configMu serializes HTTP/config writers. It is deliberately not held while
@@ -231,7 +232,7 @@ func driveTaskAdmissionFromContext(ctx context.Context, gate *driveOperationGate
 	if ctx == nil || gate == nil {
 		return 0, false
 	}
-	admission, ok := ctx.Value(driveTaskAdmissionContextKey{}).(driveTaskAdmission)
+	admission, ok := ctx.Value(driveTaskAdmissionContextKey{gate}).(driveTaskAdmission)
 	return admission.generation, ok && admission.gate == gate
 }
 
@@ -239,7 +240,7 @@ func withDriveTaskAdmission(ctx context.Context, gate *driveOperationGate, gener
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, driveTaskAdmissionContextKey{}, driveTaskAdmission{
+	return context.WithValue(ctx, driveTaskAdmissionContextKey{gate}, driveTaskAdmission{
 		gate:       gate,
 		generation: generation,
 	})
@@ -1334,10 +1335,6 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 	if scriptPath != "" {
 		workDir = filepath.Dir(scriptPath)
 	}
-	protocol := scriptcrawler.ProtocolV1
-	if meta, err := scriptcrawler.ReadMetadata(scriptPath); err == nil {
-		protocol = meta.Protocol
-	}
 
 	driveID := d.ID
 	_, _, fingerprintLimiter := a.generationLimits()
@@ -1346,7 +1343,6 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 		Driver:             drv,
 		Catalog:            a.cat,
 		CrawlerName:        d.Name,
-		Protocol:           protocol,
 		PythonPath:         pythonPath,
 		FFmpegPath:         a.cfg.Preview.FFmpegPath,
 		FFprobePath:        a.cfg.Preview.FFprobePath,
@@ -1356,16 +1352,9 @@ func (a *App) attachScriptCrawler(d *catalog.Drive, drv *scriptcrawler.Driver) {
 		LocalPreviewDir:    a.cfg.Storage.LocalPreviewDir,
 		ProxyURL:           proxyURL,
 		ConfigJSON:         configJSON,
-		OnProgress: func(progress scriptcrawler.CrawlProgress) {
-			scanned := progress.Checked
-			if scanned < progress.TotalEntries {
-				scanned = progress.TotalEntries
-			}
-			added := progress.Emitted
-			if added < progress.NewVideos {
-				added = progress.NewVideos
-			}
-			a.updateDriveScanProgress(driveID, scanned, added)
+		FeedID:             d.Credentials["feed_id"],
+		OnProgress: func(progress crawljob.Result) {
+			a.updateDriveScanProgress(driveID, progress.Checked, progress.NewVideos)
 		},
 	})
 
@@ -1801,6 +1790,21 @@ func (a *App) restoreDriveGenerationWorkers(driveID string, gate *driveOperation
 
 func (a *App) stopDriveTasks(ctx context.Context, driveID string) bool {
 	driveID = strings.TrimSpace(driveID)
+	a.mu.Lock()
+	crawler := a.scriptCrawlers[driveID]
+	a.mu.Unlock()
+	if crawler != nil && crawler.StopTasks() {
+		// Keep task leases, generation workers and uploads alive until all
+		// completed videos finish. Repeated pauses remain graceful as well.
+		return true
+	}
+	return a.cancelDriveTasks(ctx, driveID)
+}
+
+// cancelDriveTasks forcefully stops all work, including crawler completion.
+// Use it for deletion and the explicit application-wide stop operation.
+func (a *App) cancelDriveTasks(ctx context.Context, driveID string) bool {
+	driveID = strings.TrimSpace(driveID)
 	if driveID == "" {
 		return false
 	}
@@ -1828,7 +1832,7 @@ func (a *App) stopAllDriveTasks(ctx context.Context) int {
 	}
 	stopped := 0
 	for _, driveID := range a.driveTaskIDs() {
-		if a.stopDriveTasks(ctx, driveID) {
+		if a.cancelDriveTasks(ctx, driveID) {
 			stopped++
 		}
 	}

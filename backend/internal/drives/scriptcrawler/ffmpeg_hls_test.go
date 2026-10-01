@@ -123,7 +123,7 @@ func TestDownloadHLSAtomicUsesLegacyCompatibleFFmpegArgs(t *testing.T) {
 	c := NewCrawler(CrawlerConfig{FFmpegPath: writeScriptCrawlerFFmpegStub(t, tmp)})
 
 	dst := filepath.Join(tmp, "video.mp4")
-	size, err := c.downloadHLSAtomic(context.Background(), MediaRef{URL: "https://example.com/video.m3u8"}, dst, "")
+	size, err := c.downloadHLSAtomic(context.Background(), MediaRef{Type: "url", URL: "https://example.com/video.m3u8"}, dst)
 	if err != nil {
 		t.Fatalf("download HLS: %v", err)
 	}

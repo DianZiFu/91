@@ -170,6 +170,10 @@ func (c *Catalog) RecordCrawlerDuplicate(ctx context.Context, source, canonical 
 	if err := markCrawlerSourceSeen(ctx, tx, seen.Kind, seen.DriveID, seen.SourceID, seen.Status, canonical.ID, seen.SampledSHA256, seen.Size); err != nil {
 		return err
 	}
+	if err := bindCrawlerDiscovery(ctx, tx, seen.DriveID, seen.DiscoveryKey, seen.SourceID); err != nil {
+		return err
+	}
+
 	// Preserve the snapshots actually compared by ingress. Re-reading metadata
 	// here could associate the old score with a subsequently changed file.
 	if err := recordDuplicateDecision(ctx, tx, DuplicateOriginCrawler, DuplicateOutcomeSkipped, source, canonical, canonical, canonical, evidence); err != nil {

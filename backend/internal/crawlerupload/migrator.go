@@ -449,9 +449,10 @@ type Config struct {
 }
 
 type Migrator struct {
-	cfg     Config
-	mu      sync.Mutex
-	running bool
+	cfg      Config
+	mu       sync.Mutex
+	running  bool
+	finished chan struct{}
 
 	// Cooldowns belong to destination accounts, so throttling one provider
 	// cannot block uploads to an unrelated target.
@@ -531,6 +532,37 @@ func (m *Migrator) RunDrives(ctx context.Context, driveIDs []string) error {
 	return m.run(ctx, cleaned)
 }
 
+// RunDrive completes an admitted crawl's upload stage. Unlike manual upload
+// admission, this waits for the shared migration slot instead of discarding
+// the upload stage when another crawler is finishing at the same time.
+func (m *Migrator) RunDrive(ctx context.Context, driveID string) error {
+	driveID = strings.TrimSpace(driveID)
+	if driveID == "" {
+		return errors.New("missing crawler drive ID")
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		if !m.running {
+			m.running = true
+			m.finished = make(chan struct{})
+			m.mu.Unlock()
+			break
+		}
+		finished := m.finished
+		m.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-finished:
+		}
+	}
+	defer m.finishRun()
+	return m.run(ctx, []string{driveID})
+}
+
 // StartDrive 原子地占用迁移器并异步迁移指定的单个爬虫。返回 false 表示
 // 此时已有全量或单爬虫迁移在运行；调用方必须把它作为“任务忙”反馈给用户，
 // 不能把这次请求报告成已接受。完成通道只会返回一个结果并随后关闭。
@@ -539,11 +571,17 @@ func (m *Migrator) StartDrive(ctx context.Context, driveID string) (<-chan error
 	if driveID == "" || !m.tryBeginRun() {
 		return nil, false
 	}
+	result, err := m.acceptDrive(ctx, driveID)
+	if err != nil {
+		m.finishRun()
+		log.Printf("[crawlerupload] admission: %v", err)
+		return nil, false
+	}
 	done := make(chan error, 1)
 	go func() {
 		err := func() error {
 			defer m.finishRun()
-			return m.run(ctx, []string{driveID})
+			return m.runDrive(ctx, driveID, make(map[string]error), result)
 		}()
 		done <- err
 		close(done)
@@ -565,12 +603,15 @@ func (m *Migrator) tryBeginRun() bool {
 		return false
 	}
 	m.running = true
+	m.finished = make(chan struct{})
 	return true
 }
 
 func (m *Migrator) finishRun() {
 	m.mu.Lock()
 	m.running = false
+	close(m.finished)
+	m.finished = nil
 	m.mu.Unlock()
 }
 

@@ -98,7 +98,7 @@ func testRestoredPreviewWithDatabaseDirectories(t *testing.T, sourceDBDir, targe
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = 'Restored crawler'\n"), 0o600); err != nil {
+	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = 'Restored crawler'\nCRAWLER_PROTOCOL = 'crawler.v3'\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := sourceCatalog.UpsertDrive(ctx, &catalog.Drive{ID: "crawler", Kind: "scriptcrawler", Name: "Restored crawler", Credentials: map[string]string{"script_file": "demo.py"}}); err != nil {

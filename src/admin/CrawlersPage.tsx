@@ -5,48 +5,45 @@ import {
   useRef,
   useState,
   type DragEvent,
-  type ReactNode,
 } from "react";
 import {
-  AlertTriangle,
-  Check,
-  Download,
-  FileCode2,
+  CheckCircle2,
+  ChevronDown,
+  Link2,
+  LoaderCircle,
+  Play,
   Plus,
-  TestTube,
   Upload,
 } from "lucide-react";
 import * as api from "./api";
+import { editorFormFromCrawler, editorFormWithImportedScript, type CrawlerEditorForm } from "./crawlerEditor";
 import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { useToast } from "@/components/ToastContext";
-import { generationStateClass, generationStateLabel } from "./drive/constants";
 import { CrawlerUploadTargetField } from "./drive/CrawlerUploadTargetField";
 import { SpiderIcon } from "./icons/SpiderIcon";
+import { ScriptFileIcon } from "./icons/ScriptFileIcon";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { CrawlerListSkeleton } from "./CrawlersPageLoading";
+import {
+  crawlerActionReasons,
+  crawlerActivity,
+  crawlerBusy,
+  crawlerCrawlStatus,
+  crawlerGenerationStatus,
+  crawlerTestSummary,
+  crawlerUploadResult,
+  crawlerUploadStatus,
+  type CrawlerAction,
+  type CrawlerDisplayStatus,
+} from "./crawlerStatus";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
 import {
   useAdminRouteActive,
   useAdminRouteRevalidation,
 } from "./AdminRouteCache";
 
-const BUSY_STATES = new Set(["scanning", "generating", "uploading", "queued"]);
 const POLL_INTERVAL_MS = 5000;
-
-function statusBusy(status?: api.DriveGenerationStatus) {
-  return BUSY_STATES.has(status?.state ?? "");
-}
-
-function crawlerBusy(crawler: api.AdminCrawler) {
-  return (
-    statusBusy(crawler.scanGenerationStatus) ||
-    statusBusy(crawler.thumbnailGenerationStatus) ||
-    statusBusy(crawler.previewGenerationStatus) ||
-    statusBusy(crawler.fingerprintGenerationStatus) ||
-    statusBusy(crawler.uploadGenerationStatus)
-  );
-}
 
 export function CrawlersPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
@@ -55,32 +52,40 @@ export function CrawlersPage() {
   const [uploadTargets, setUploadTargets] = useState<api.AdminDrive[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailTargetId, setDetailTargetId] = useState("");
-  const [runningId, setRunningId] = useState("");
-  const [uploadingId, setUploadingId] = useState("");
-  const [stoppingId, setStoppingId] = useState("");
-  const [togglingPausedId, setTogglingPausedId] = useState("");
+  const [pendingActions, setPendingActions] = useState<Record<string, CrawlerAction>>({});
+  const pendingActionsRef = useRef<Record<string, CrawlerAction>>({});
+  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   // undefined = 编辑器关闭；null = 新建；其余 = 编辑已有爬虫
   const [editorTarget, setEditorTarget] = useState<api.AdminCrawler | null | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<api.AdminCrawler | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const refreshingRef = useRef(false);
+  const refreshingRef = useRef<Promise<void> | null>(null);
   const { show } = useToast();
 
   const refresh = useCallback(
-    async (silent = false) => {
-      if (refreshingRef.current) return;
-      refreshingRef.current = true;
-      if (!silent) setLoading(true);
-      try {
-        const [data, drives] = await Promise.all([api.listCrawlers(), api.listDrives()]);
-        setList(data);
-        setUploadTargets(drives.filter((d) => d.canUpload));
-      } catch (e) {
-        if (!silent) show(e instanceof Error ? e.message : "加载爬虫失败", "error");
-      } finally {
-        refreshingRef.current = false;
-        if (!silent) setLoading(false);
+    async function refreshData(silent = false): Promise<void> {
+      if (refreshingRef.current) {
+        await refreshingRef.current;
+        return refreshData(silent);
       }
+      const request = (async () => {
+        if (!silent) setLoading(true);
+        try {
+          const [data, drives, maintenance] = await Promise.all([
+            api.listCrawlers(), api.listDrives(), api.getScanAllJobStatus(),
+          ]);
+          setList(data);
+          setUploadTargets(drives.filter((d) => d.canUpload));
+          setMaintenanceBusy(maintenance.running || maintenance.queued);
+        } catch (e) {
+          if (!silent) show(e instanceof Error ? e.message : "加载爬虫失败", "error");
+        } finally {
+          if (!silent) setLoading(false);
+        }
+      })();
+      refreshingRef.current = request;
+      await request;
+      refreshingRef.current = null;
     },
     [show]
   );
@@ -93,18 +98,45 @@ export function CrawlersPage() {
     void refresh(true);
   });
 
-  // 有任务进行中时自动轮询，页面切到后台时暂停
-  const anyBusy = useMemo(() => list.some(crawlerBusy), [list]);
+  // 空闲时也刷新，以发现定时任务或其他页面发起的操作。
+  const anyBusy = useMemo(() => maintenanceBusy || list.some(crawlerBusy), [list, maintenanceBusy]);
   useEffect(() => {
-    if (!routeActive || !anyBusy) return;
+    if (!routeActive) return;
     const timer = window.setInterval(() => {
-      if (!document.hidden) refresh(true);
-    }, POLL_INTERVAL_MS);
+      if (!document.hidden && !refreshingRef.current) refresh(true);
+    }, anyBusy ? POLL_INTERVAL_MS : 15000);
     return () => window.clearInterval(timer);
   }, [anyBusy, refresh, routeActive]);
 
+  function beginAction(id: string, action: CrawlerAction) {
+    if (pendingActionsRef.current[id]) return false;
+    pendingActionsRef.current = { ...pendingActionsRef.current, [id]: action };
+    setPendingActions(pendingActionsRef.current);
+    return true;
+  }
+
+  function finishAction(id: string) {
+    const next = { ...pendingActionsRef.current };
+    delete next[id];
+    pendingActionsRef.current = next;
+    setPendingActions(next);
+  }
+
+  function actionReasons(crawler: api.AdminCrawler) {
+    return crawlerActionReasons(crawler, {
+      pending: pendingActionsRef.current[crawler.id],
+      maintenanceBusy,
+      uploadTargetAvailable: uploadTargets.some(target => target.id === crawler.uploadDriveId),
+    });
+  }
+
   async function run(crawler: api.AdminCrawler) {
-    setRunningId(crawler.id);
+    const reason = actionReasons(crawler).run;
+    if (reason) {
+      show(reason, "info");
+      return;
+    }
+    if (!beginAction(crawler.id, "run")) return;
     try {
       const resp = await api.runCrawler(crawler.id);
       if (!resp.accepted) {
@@ -112,58 +144,69 @@ export function CrawlersPage() {
         return;
       }
       show("已触发抓取任务", "success");
-      await refresh(true);
     } catch (e) {
       show(e instanceof Error ? e.message : "触发失败", "error");
     } finally {
-      setRunningId("");
+      await refresh(true);
+      finishAction(crawler.id);
     }
   }
 
   async function uploadVideos(crawler: api.AdminCrawler) {
-    setUploadingId(crawler.id);
+    const reason = actionReasons(crawler).upload;
+    if (reason) {
+      show(reason, "info");
+      return;
+    }
+    if (!beginAction(crawler.id, "upload")) return;
     try {
+      if (crawler.localVideoCount === 0) {
+        show("当前没有需要上传的视频", "info");
+        return;
+      }
       const resp = await api.uploadCrawlerVideos(crawler.id);
       if (!resp.accepted) {
         show(resp.message || "当前爬虫暂不满足上传条件", "info");
         return;
       }
       show("已触发当前爬虫的上传任务", "success");
-      await refresh(true);
     } catch (e) {
       show(e instanceof Error ? e.message : "触发上传失败", "error");
     } finally {
-      setUploadingId("");
+      await refresh(true);
+      finishAction(crawler.id);
     }
   }
 
   async function stop(crawler: api.AdminCrawler) {
-    setStoppingId(crawler.id);
+    if (!beginAction(crawler.id, "stop")) return;
     try {
       const resp = await api.stopCrawlerTasks(crawler.id);
-      show(resp.stopped ? "已请求停止任务" : "当前没有可停止任务", "info");
-      await refresh(true);
+      const hasCrawlTask = crawler.currentTask?.state === "queued" || crawler.currentTask?.state === "running";
+      show(resp.stopped
+        ? hasCrawlTask ? "已暂停抓取" : "已请求停止任务"
+        : "当前没有可停止任务", "info");
     } catch (e) {
       show(e instanceof Error ? e.message : "停止失败", "error");
     } finally {
-      setStoppingId("");
+      await refresh(true);
+      finishAction(crawler.id);
     }
   }
 
   async function togglePaused(crawler: api.AdminCrawler) {
+    if (!beginAction(crawler.id, "pause")) return;
     const next = !crawler.paused;
-    const previous = list;
-    setTogglingPausedId(crawler.id);
     setList((prev) => prev.map((item) => (item.id === crawler.id ? { ...item, paused: next } : item)));
     try {
       await api.setCrawlerPaused(crawler.id, next);
       show(next ? "已暂停该爬虫的凌晨抓取" : "已恢复该爬虫的凌晨抓取", "success");
-      await refresh(true);
     } catch (e) {
-      setList(previous);
+      setList(prev => prev.map(item => item.id === crawler.id ? { ...item, paused: crawler.paused } : item));
       show(e instanceof Error ? e.message : "切换暂停状态失败", "error");
     } finally {
-      setTogglingPausedId("");
+      await refresh(true);
+      finishAction(crawler.id);
     }
   }
 
@@ -213,10 +256,7 @@ export function CrawlersPage() {
                   key={crawler.id}
                   crawler={crawler}
                   expanded={detailTargetId === crawler.id}
-                  running={runningId === crawler.id}
-                  uploading={uploadingId === crawler.id}
-                  stopping={stoppingId === crawler.id}
-                  togglingPaused={togglingPausedId === crawler.id}
+                  pendingAction={pendingActions[crawler.id]}
                   onToggleOpen={() => setDetailTargetId((current) => (current === crawler.id ? "" : crawler.id))}
                   onRun={() => run(crawler)}
                   onUpload={() => uploadVideos(crawler)}
@@ -278,10 +318,7 @@ export function CrawlersPage() {
 function CrawlerRow({
   crawler,
   expanded,
-  running,
-  uploading,
-  stopping,
-  togglingPaused,
+  pendingAction,
   onToggleOpen,
   onRun,
   onUpload,
@@ -292,10 +329,7 @@ function CrawlerRow({
 }: {
   crawler: api.AdminCrawler;
   expanded: boolean;
-  running: boolean;
-  uploading: boolean;
-  stopping: boolean;
-  togglingPaused: boolean;
+  pendingAction?: CrawlerAction;
   onToggleOpen: () => void;
   onRun: () => void;
   onUpload: () => void;
@@ -304,7 +338,8 @@ function CrawlerRow({
   onDelete: () => void;
   onTogglePaused: () => void;
 }) {
-  const crawling = running || crawler.scanGenerationStatus?.state === "scanning";
+  const activity = pendingAction === "run" || pendingAction === "upload" || pendingAction === "stop"
+    ? { text: "处理中", tone: "generating" } : crawlerActivity(crawler);
   return (
     <div className={`admin-crawler-row ${expanded ? "is-expanded" : ""}`}>
       <div className="admin-crawler-row__line">
@@ -313,9 +348,9 @@ function CrawlerRow({
           <span className="admin-crawler-row__title-wrap">
             <span className="admin-crawler-row__title-line">
               <strong>{crawler.name}</strong>
-              {crawling && (
-                <span className="admin-status admin-generation-state is-generating">
-                  正在抓取
+              {activity && (
+                <span className={`admin-status admin-generation-state is-${activity.tone}`}>
+                  {activity.text}
                 </span>
               )}
             </span>
@@ -325,19 +360,19 @@ function CrawlerRow({
           </span>
         </button>
         <div className="admin-crawler-row__actions">
-          <button className="admin-btn" type="button" onClick={onTogglePaused} disabled={togglingPaused}>
-            {togglingPaused ? "处理中..." : crawler.paused ? "恢复使用" : "暂停使用"}
+          <button className="admin-btn" type="button" onClick={onTogglePaused} disabled={!!pendingAction}>
+            {pendingAction === "pause" ? "处理中..." : crawler.paused ? "恢复使用" : "暂停使用"}
           </button>
-          <button className="admin-btn" type="button" onClick={onRun} disabled={running}>
-            {running ? "触发中..." : "立即抓取"}
+          <button className="admin-btn" type="button" onClick={onRun}>
+            {pendingAction === "run" ? "触发中..." : "立即抓取"}
           </button>
           <button className="admin-btn" type="button" onClick={onUpload}>
-            {uploading ? "提交中..." : "触发上传"}
+            {pendingAction === "upload" ? "触发中..." : "触发上传"}
           </button>
-          <button className="admin-btn" type="button" onClick={onEdit}>
+          <button className="admin-btn" type="button" onClick={onEdit} disabled={!!pendingAction}>
             编辑
           </button>
-          <button className="admin-btn is-danger" type="button" onClick={onDelete}>
+          <button className="admin-btn is-danger" type="button" onClick={onDelete} disabled={!!pendingAction}>
             删除
           </button>
         </div>
@@ -345,7 +380,8 @@ function CrawlerRow({
       {expanded && (
         <CrawlerDetail
           crawler={crawler}
-          stopping={stopping}
+          stopping={pendingAction === "stop"}
+          actionPending={!!pendingAction}
           onStop={onStop}
         />
       )}
@@ -356,20 +392,24 @@ function CrawlerRow({
 function CrawlerDetail({
   crawler,
   stopping,
+  actionPending,
   onStop,
 }: {
   crawler: api.AdminCrawler;
   stopping: boolean;
+  actionPending: boolean;
   onStop: () => void;
 }) {
   const scan = crawler.scanGenerationStatus;
-  const upload = crawlerUploadDisplayStatus(crawler);
+  const recentCrawl = crawler.currentTask ?? crawler.lastCrawlResult;
+  const upload = crawlerUploadStatus(crawler);
+  const uploadResult = crawlerUploadResult(crawler);
   const busy = crawlerBusy(crawler);
   return (
     <div className="admin-crawler-detail">
       {busy && (
         <div className="admin-crawler-detail__actions">
-          <button className="admin-btn" type="button" onClick={onStop} disabled={stopping}>
+          <button className="admin-btn" type="button" onClick={onStop} disabled={actionPending}>
             {stopping ? "暂停中..." : "暂停"}
           </button>
         </div>
@@ -378,19 +418,20 @@ function CrawlerDetail({
         <GenStageCard
           label="抓取"
           status={scan}
-          stateText={scan?.state === "scanning" ? "抓取中" : generationStateLabel(scan?.state || "idle")}
+          display={crawlerCrawlStatus(crawler)}
           counts={[
             { label: "累计爬取", value: crawler.totalCrawledCount ?? 0 },
-            { label: "本轮检查", value: scan?.scannedCount ?? 0 },
-            { label: "本轮新增", value: scan?.addedCount ?? 0 },
+            { label: "最近检查", value: recentCrawl?.checked ?? 0 },
+            { label: "最近新增", value: recentCrawl?.newVideos ?? 0 },
           ]}
         />
         <GenStageCard
           label="上传"
-          status={upload.status}
-          stateText={upload.text}
+          status={crawler.uploadGenerationStatus}
+          display={upload}
           counts={[
-            { label: "已上传", value: crawler.migratedVideoCount ?? 0 },
+            { label: "累计上传", value: crawler.migratedVideoCount ?? 0 },
+            { label: "最近上传", value: uploadResult?.uploadedCount ?? 0 },
             { label: "本地保留", value: crawler.localVideoCount ?? 0 },
           ]}
         />
@@ -422,77 +463,28 @@ function CrawlerDetail({
           ]}
         />
       </div>
-      {crawler.lastError && (
-        <div className="admin-crawler-detail__error">
-          <AlertTriangle size={14} />
-          <span>{crawler.lastError}</span>
-        </div>
-      )}
     </div>
   );
-}
-
-function crawlerUploadDisplayStatus(crawler: api.AdminCrawler): {
-  status: api.DriveGenerationStatus;
-  text: string;
-} {
-  const live = crawler.uploadGenerationStatus;
-  const state = live?.state || "idle";
-  const localCount = crawler.localVideoCount ?? 0;
-  const totalCount = crawler.totalCrawledCount ?? 0;
-  const base: api.DriveGenerationStatus = {
-    state,
-    currentTitle: live?.currentTitle,
-    queueLength: live?.queueLength ?? 0,
-    cooldownUntil: live?.cooldownUntil,
-    scannedCount: live?.scannedCount ?? 0,
-    addedCount: live?.addedCount ?? 0,
-    doneCount: live?.doneCount ?? 0,
-    totalCount: live?.totalCount ?? 0,
-  };
-
-  if (!crawler.uploadDriveId) {
-    return {
-      status: base,
-      text: localCount > 0 ? "本地保存" : generationStateLabel(state),
-    };
-  }
-  if (state === "uploading") {
-    return { status: base, text: "上传中" };
-  }
-  if (state === "queued") {
-    return { status: base, text: "排队中" };
-  }
-  if (localCount > 0) {
-    return {
-      status: base,
-      text: "待处理",
-    };
-  }
-  if (totalCount > 0) {
-    return { status: base, text: "完成" };
-  }
-  return { status: base, text: generationStateLabel(state) };
 }
 
 function GenStageCard({
   label,
   status,
-  stateText,
+  display,
   counts,
 }: {
   label: string;
   status?: api.DriveGenerationStatus;
-  stateText?: string;
+  display?: CrawlerDisplayStatus;
   counts: Array<{ label: string; value: number; tone?: "danger" }>;
 }) {
-  const state = status?.state || "idle";
+  const mapped = display ?? crawlerGenerationStatus(status);
   return (
     <div className="admin-gen-col">
       <div className="admin-gen-col__head">
         <span className="admin-gen-col__label">{label}</span>
-        <span className={`admin-status admin-generation-state is-${generationStateClass(state)}`}>
-          {stateText ?? generationStateLabel(state)}
+        <span className={`admin-status admin-generation-state is-${mapped.tone}`}>
+          {mapped.text}
         </span>
       </div>
       {status?.currentTitle && <div className="admin-gen-col__detail">{status.currentTitle}</div>}
@@ -510,28 +502,6 @@ function GenStageCard({
 
 // ---------- 编辑器 ----------
 
-type EditorForm = {
-  scriptPath: string;
-  scriptSourceUrl: string;
-  name: string;
-  targetNew: string;
-  proxy: string;
-  uploadProxy: string;
-  uploadDriveId: string;
-};
-
-function editorFormFromCrawler(crawler: api.AdminCrawler | null): EditorForm {
-  return {
-    scriptPath: crawler?.scriptPath ?? "",
-    scriptSourceUrl: crawler?.scriptSourceUrl ?? "",
-    name: crawler?.name ?? "",
-    targetNew: crawler?.targetNew || "10",
-    proxy: crawler?.proxy ?? "",
-    uploadProxy: crawler?.uploadProxy ?? "",
-    uploadDriveId: crawler?.uploadDriveId ?? "",
-  };
-}
-
 function CrawlerEditorModal({
   open,
   crawler,
@@ -546,51 +516,46 @@ function CrawlerEditorModal({
   onSaved: () => void;
 }) {
   const isEdit = crawler !== null;
-  const [form, setForm] = useState<EditorForm>(() => editorFormFromCrawler(crawler));
+  const [form, setForm] = useState<CrawlerEditorForm>(() => editorFormFromCrawler(crawler));
   const [scriptURL, setScriptURL] = useState("");
+  const [importMode, setImportMode] = useState<"file" | "url">("file");
   const [importing, setImporting] = useState(false);
   const [replacingScript, setReplacingScript] = useState(false);
-  // 已通过原链接拉取过新脚本（路径不变，内容已更新）
-  const [scriptUpdated, setScriptUpdated] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<api.CrawlerDryRunResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { show } = useToast();
+  const busy = importing || testing || saving;
+  const selectedFeed = form.feeds.find(feed => feed.id === form.selectedFeedId);
+  const feedError = !form.scriptPath || selectedFeed ? ""
+    : form.selectedFeedId ? "脚本已不支持原选栏目，请重新选择。" : "请选择抓取栏目。";
 
   useEffect(() => {
     if (!open) return;
     setForm(editorFormFromCrawler(crawler));
     setScriptURL("");
+    setImportMode("file");
     setTestResult(null);
     setDragOver(false);
     setReplacingScript(false);
-    setScriptUpdated(false);
   }, [open, crawler]);
 
-  // 编辑模式下默认收起导入区，点「替换脚本文件」再展开
-  const showImportArea = !isEdit || replacingScript;
-  const scriptChanged = form.scriptPath !== (crawler?.scriptPath ?? "");
+  // 导入成功后展示脚本信息，替换时再展开导入区。
+  const showImportArea = !form.scriptPath || replacingScript;
 
-  function set<K extends keyof EditorForm>(key: K, value: EditorForm[K]) {
+  function set<K extends keyof CrawlerEditorForm>(key: K, value: CrawlerEditorForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
   function cancelReplace() {
-    setForm((prev) => ({
-      ...prev,
-      scriptPath: crawler?.scriptPath ?? "",
-      scriptSourceUrl: crawler?.scriptSourceUrl ?? "",
-      name: crawler?.name ?? "",
-    }));
     setScriptURL("");
-    setTestResult(null);
     setReplacingScript(false);
   }
 
   async function importFile(file: File | null | undefined) {
-    if (!file) return;
+    if (!file || busy) return;
     if (!file.name.toLowerCase().endsWith(".py")) {
       show("仅支持 .py 脚本文件", "error");
       return;
@@ -598,8 +563,9 @@ function CrawlerEditorModal({
     setImporting(true);
     try {
       const resp = await api.importCrawlerScriptFile(file);
-      setForm((prev) => ({ ...prev, scriptPath: resp.scriptPath, name: resp.name, scriptSourceUrl: "" }));
+      setForm((prev) => editorFormWithImportedScript(prev, resp));
       setTestResult(null);
+      setReplacingScript(false);
       show("脚本已导入", "success");
     } catch (e) {
       show(e instanceof Error ? e.message : "导入失败", "error");
@@ -609,6 +575,7 @@ function CrawlerEditorModal({
   }
 
   async function importURL() {
+    if (busy) return;
     const url = scriptURL.trim();
     if (!url) {
       show("请填写链接", "error");
@@ -617,15 +584,11 @@ function CrawlerEditorModal({
     setImporting(true);
     try {
       const resp = await api.importCrawlerScriptURL(url);
-      setForm((prev) => ({
-        ...prev,
-        scriptPath: resp.scriptPath,
-        name: resp.name,
-        scriptSourceUrl: resp.sourceUrl || url,
-      }));
+      setForm((prev) => editorFormWithImportedScript(prev, { ...resp, sourceUrl: resp.sourceUrl || url }));
       setScriptURL("");
       setTestResult(null);
-      show("脚本已导入，保存后可随时从原链接更新", "success");
+      setReplacingScript(false);
+      show("脚本已导入", "success");
     } catch (e) {
       show(e instanceof Error ? e.message : "导入失败", "error");
     } finally {
@@ -634,19 +597,14 @@ function CrawlerEditorModal({
   }
 
   async function updateFromSource() {
+    if (busy) return;
     const url = form.scriptSourceUrl.trim();
     if (!url) return;
     setImporting(true);
     try {
       const resp = await api.importCrawlerScriptURL(url);
-      setForm((prev) => ({
-        ...prev,
-        scriptPath: resp.scriptPath,
-        name: resp.name,
-        scriptSourceUrl: resp.sourceUrl || url,
-      }));
+      setForm((prev) => editorFormWithImportedScript(prev, { ...resp, sourceUrl: resp.sourceUrl || url }));
       setTestResult(null);
-      setScriptUpdated(true);
       show("已从原链接拉取最新脚本", "success");
     } catch (e) {
       show(e instanceof Error ? e.message : "从原链接更新失败", "error");
@@ -656,18 +614,23 @@ function CrawlerEditorModal({
   }
 
   async function test() {
+    if (busy) return;
     const scriptPath = form.scriptPath.trim();
     if (!scriptPath) {
       show("请先导入爬虫脚本", "error");
       return;
     }
+    if (feedError) {
+      show(feedError, "error");
+      return;
+    }
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await api.testCrawlerScript({ scriptPath, proxy: form.proxy.trim() });
+      const result = await api.testCrawlerScript({ scriptPath, proxy: form.proxy.trim(), selectedFeedId: form.selectedFeedId });
       setTestResult(result);
       if (result.ok) {
-        show("测试通过", "success");
+        show(crawlerTestSummary(result), "success");
       } else {
         show(crawlerTestFailure(result) || "测试失败", "error");
       }
@@ -679,8 +642,13 @@ function CrawlerEditorModal({
   }
 
   async function save() {
+    if (busy) return;
     if (!form.scriptPath.trim()) {
       show("请先导入爬虫脚本", "error");
+      return;
+    }
+    if (feedError) {
+      show(feedError, "error");
       return;
     }
     const target = form.targetNew.trim();
@@ -692,6 +660,7 @@ function CrawlerEditorModal({
     try {
       const resp = await api.upsertCrawler({
         id: crawler?.id,
+        selectedFeedId: form.selectedFeedId,
         scriptPath: form.scriptPath.trim(),
         scriptSourceUrl: form.scriptSourceUrl.trim(),
         targetNew: target,
@@ -717,72 +686,40 @@ function CrawlerEditorModal({
   function onDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDragOver(false);
-    if (importing) return;
+    if (busy) return;
     importFile(e.dataTransfer.files?.[0]);
   }
-
-  const footerNote = !form.scriptPath
-    ? null
-    : testResult?.ok
-      ? { text: "测试通过", tone: "is-ok" }
-      : testResult
-        ? { text: "测试未通过，建议检查脚本", tone: "is-error" }
-        : scriptChanged || scriptUpdated
-          ? { text: "建议先运行测试再保存", tone: "" }
-          : null;
 
   return (
     <Modal
       open={open}
-      title={isEdit ? (crawler?.name ?? "编辑爬虫") : "添加爬虫"}
-      onClose={onClose}
+      title={isEdit ? "编辑爬虫" : "添加爬虫"}
+      onClose={() => { if (!busy) onClose(); }}
       className="admin-modal--crawler"
       footer={
         <>
-          {footerNote && <span className={`admin-modal__footer-note ${footerNote.tone}`}>{footerNote.text}</span>}
-          <button type="button" className="admin-btn" onClick={onClose} disabled={saving}>
+          <button type="button" className="admin-btn" onClick={onClose} disabled={busy}>
             取消
           </button>
-          <button type="button" className="admin-btn is-primary" onClick={save} disabled={saving || !form.scriptPath}>
-            {saving ? "保存中..." : "保存"}
+          <button type="button" className="admin-btn is-primary" onClick={save} disabled={busy || !form.scriptPath || !!feedError}>
+            {saving ? "保存中..." : "确认"}
           </button>
         </>
       }
     >
       <div className="admin-crawler-editor">
-        <div className="admin-crawler-editor__summary" aria-label="爬虫配置状态">
-          <CrawlerEditorSummaryItem
-            label="脚本"
-            value={form.scriptPath ? form.name || "已导入" : "未导入"}
-            tone={form.scriptPath ? "ok" : "muted"}
-            icon={<FileCode2 size={13} />}
-          />
-          <CrawlerEditorSummaryItem
-            label="测试"
-            value={testResult?.ok ? "已通过" : testResult ? "未通过" : "未测试"}
-            tone={testResult?.ok ? "ok" : testResult ? "error" : "muted"}
-            icon={<TestTube size={13} />}
-          />
-          <CrawlerEditorSummaryItem
-            label="每轮新增"
-            value={`${form.targetNew.trim() || "10"} 条`}
-            tone="muted"
-            icon={<Download size={13} />}
-          />
-        </div>
-
         <div className="admin-crawler-editor__grid">
-          <section className="admin-crawler-panel admin-crawler-panel--script">
+          <section className="admin-crawler-panel admin-crawler-panel--script" aria-labelledby="crawler-script-heading">
             <header className="admin-crawler-panel__head">
-              <div>
-                <strong>维护脚本</strong>
-              </div>
+              <span className="admin-crawler-section-number" aria-hidden="true">01</span>
+              <h3 id="crawler-script-heading">爬虫脚本</h3>
             </header>
 
             <input
               ref={fileInputRef}
               type="file"
               accept=".py,text/x-python"
+              disabled={busy}
               hidden
               onChange={(e) => {
                 importFile(e.target.files?.[0]);
@@ -790,36 +727,48 @@ function CrawlerEditorModal({
               }}
             />
 
-            {isEdit && form.scriptPath && (
-              <div className={`admin-crawler-current-script${isEdit && scriptChanged ? " is-replaced" : ""}`}>
+            {form.scriptPath && (
+              <div className="admin-crawler-current-script">
+                <div className="admin-crawler-script-identity">
+                  <ScriptFileIcon size={40} className="admin-crawler-script-icon" />
+                  <div>
+                    <strong>{form.name || "已导入脚本"}</strong>
+                  </div>
+                  <CheckCircle2 size={17} className="admin-crawler-script-check" aria-label="脚本已导入" />
+                </div>
+                <div className="admin-crawler-script-meta">
+                  <span>{form.scriptSourceUrl ? "链接导入" : "本地导入"}</span>
+                  <span>{form.feeds.length} 个可选栏目</span>
+                </div>
+                {form.scriptSourceUrl && <p className="admin-crawler-script-source" title={form.scriptSourceUrl}>{form.scriptSourceUrl}</p>}
                 <div className="admin-crawler-current-script__actions">
                   {replacingScript ? (
-                    <button type="button" className="admin-btn" onClick={cancelReplace} disabled={importing}>
-                      取消替换
-                    </button>
+                    <button type="button" className="admin-btn" onClick={cancelReplace} disabled={busy}>取消替换</button>
                   ) : (
                     <>
-                      {form.scriptSourceUrl && (
-                        <button
-                          type="button"
-                          className="admin-btn"
-                          onClick={updateFromSource}
-                          disabled={importing}
-                          title={`从 ${form.scriptSourceUrl} 重新拉取脚本`}
-                        >
-                          {importing ? "更新中..." : "从原链接更新"}
-                        </button>
-                      )}
                       <button
                         type="button"
                         className="admin-btn"
+                        disabled={busy}
                         onClick={() => {
                           setScriptURL(form.scriptSourceUrl);
+                          setImportMode(form.scriptSourceUrl ? "url" : "file");
                           setReplacingScript(true);
                         }}
                       >
                         替换脚本文件
                       </button>
+                      {form.scriptSourceUrl && (
+                        <button
+                          type="button"
+                          className="admin-btn"
+                          onClick={updateFromSource}
+                          disabled={busy}
+                          title={`从 ${form.scriptSourceUrl} 重新拉取脚本`}
+                        >
+                          {importing ? "更新中..." : "从原链接更新"}
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -828,37 +777,51 @@ function CrawlerEditorModal({
 
             {showImportArea && (
               <div className="admin-crawler-import-box">
-                <div className="admin-crawler-local-import">
-                  <span>本地导入</span>
+                <div className="admin-crawler-import-methods" role="group" aria-label="脚本导入方式">
+                  <button type="button" aria-pressed={importMode === "file"} disabled={busy} onClick={() => setImportMode("file")}>
+                    <Upload size={14} aria-hidden="true" />本地文件
+                  </button>
+                  <button type="button" aria-pressed={importMode === "url"} disabled={busy} onClick={() => setImportMode("url")}>
+                    <Link2 size={14} aria-hidden="true" />脚本链接
+                  </button>
+                </div>
+                {importMode === "file" ? (
                   <div
-                    className={`admin-crawler-dropzone${dragOver ? " is-dragover" : ""}${importing ? " is-busy" : ""}`}
+                    className={`admin-crawler-dropzone${dragOver ? " is-dragover" : ""}${busy ? " is-busy" : ""}`}
                     role="button"
-                    tabIndex={0}
-                    onClick={() => !importing && fileInputRef.current?.click()}
+                    aria-label="上传爬虫脚本"
+                    aria-disabled={busy}
+                    tabIndex={busy ? -1 : 0}
+                    onClick={() => !busy && fileInputRef.current?.click()}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        if (!importing) fileInputRef.current?.click();
+                        if (!busy) fileInputRef.current?.click();
                       }
                     }}
                     onDragOver={(e) => {
                       e.preventDefault();
-                      setDragOver(true);
+                      if (!busy) setDragOver(true);
                     }}
-                    onDragLeave={() => setDragOver(false)}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
+                    }}
                     onDrop={onDrop}
                   >
-                    <Upload size={20} />
-                    <strong>{importing ? "导入中..." : "上传 .py 脚本"}</strong>
+                    <span className="admin-crawler-dropzone__icon">
+                      {importing ? <LoaderCircle size={24} className="admin-spin" aria-hidden="true" /> : <Upload size={24} strokeWidth={1.5} aria-hidden="true" />}
+                    </span>
+                    <strong>{importing ? "正在导入脚本" : "点击上传或拖入文件"}</strong>
                   </div>
-                </div>
-
-                <div className="admin-crawler-link-import">
-                  <label htmlFor="crawler-script-url">链接导入</label>
-                  <div className="admin-crawler-urlrow">
+                ) : (
+                  <div className="admin-crawler-link-import">
+                    <label htmlFor="crawler-script-url">脚本链接</label>
                     <input
                       id="crawler-script-url"
+                      type="url"
+                      className="admin-input"
                       value={scriptURL}
+                      placeholder="https://example.com/crawler.py"
                       onChange={(e) => setScriptURL(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
@@ -866,100 +829,114 @@ function CrawlerEditorModal({
                           importURL();
                         }
                       }}
-                      disabled={importing}
+                      disabled={busy}
                     />
-                    <button className="admin-btn" type="button" onClick={importURL} disabled={importing}>
-                      导入
+                    <button className="admin-btn" type="button" onClick={importURL} disabled={busy || !scriptURL.trim()}>
+                      {importing && <LoaderCircle size={14} className="admin-spin" aria-hidden="true" />}
+                      {importing ? "导入中..." : "导入脚本"}
                     </button>
                   </div>
-                </div>
+                )}
               </div>
             )}
           </section>
 
-          <div className="admin-crawler-editor__side">
-            <section className="admin-crawler-panel">
-              <header className="admin-crawler-panel__head">
-                <div>
-                  <strong>测试脚本</strong>
+          <section className="admin-crawler-panel admin-crawler-panel--settings" aria-labelledby="crawler-settings-heading">
+            <header className="admin-crawler-panel__head">
+              <span className="admin-crawler-section-number" aria-hidden="true">02</span>
+              <h3 id="crawler-settings-heading">抓取设置</h3>
+            </header>
+            <div className="admin-crawler-params">
+              <div className="admin-crawler-params__main">
+                <div className="admin-form__row">
+                  <label htmlFor="crawler-feed">抓取栏目</label>
+                  <div className="admin-form-select-wrap">
+                    <select
+                      id="crawler-feed"
+                      className="admin-form-select"
+                      value={form.selectedFeedId}
+                      disabled={busy || !form.scriptPath || form.feeds.length === 0}
+                      aria-invalid={!!feedError}
+                      aria-describedby={feedError ? "crawler-feed-error" : undefined}
+                      onChange={(e) => {
+                        set("selectedFeedId", e.target.value);
+                        setTestResult(null);
+                      }}
+                    >
+                      {!selectedFeed && <option value={form.selectedFeedId} disabled>
+                        {!form.scriptPath ? "导入脚本后选择" : form.selectedFeedId ? `原栏目 ${form.selectedFeedId} 已不可用` : "请选择栏目"}
+                      </option>}
+                      {form.feeds.map(feed => <option key={feed.id} value={feed.id}>{feed.label}</option>)}
+                    </select>
+                    <ChevronDown size={15} className="admin-form-select__icon" aria-hidden="true" />
+                  </div>
                 </div>
-              </header>
-              <button className="admin-btn" type="button" onClick={test} disabled={!form.scriptPath || importing || testing}>
-                {testing ? "测试中..." : testResult ? "重新测试" : "运行测试"}
-              </button>
-              {testResult && <CrawlerTestResult result={testResult} />}
-            </section>
-
-            <section className="admin-crawler-panel">
-              <header className="admin-crawler-panel__head">
-                <div>
-                  <strong>配置参数</strong>
-                </div>
-              </header>
-              <div className="admin-crawler-params">
                 <div className="admin-form__row">
                   <label htmlFor="crawler-target">每次新增视频数</label>
-                  <input
-                    id="crawler-target"
-                    type="number"
-                    min={1}
-                    value={form.targetNew}
-                    onChange={(e) => set("targetNew", e.target.value)}
-                    placeholder="10"
-                  />
+                  <div className="admin-crawler-number-input">
+                    <input
+                      id="crawler-target"
+                      type="number"
+                      min={1}
+                      value={form.targetNew}
+                      disabled={busy}
+                      onChange={(e) => set("targetNew", e.target.value)}
+                      placeholder="10"
+                    />
+                    <span aria-hidden="true">条</span>
+                  </div>
                 </div>
+              </div>
+              {feedError && <p id="crawler-feed-error" className="admin-crawler-field-error" role="alert">{feedError}</p>}
+              <div className="admin-crawler-destination">
+                <CrawlerUploadTargetField
+                  value={form.uploadDriveId}
+                  onChange={(value) => set("uploadDriveId", value)}
+                  uploadTargets={uploadTargets}
+                  disabled={busy}
+                />
+              </div>
+              <div className="admin-crawler-network">
                 <div className="admin-form__row">
                   <label htmlFor="crawler-proxy">抓取代理</label>
                   <input
                     id="crawler-proxy"
+                    placeholder="支持 HTTP/HTTPS 和 SOCKS5/SOCKS5H"
+                    disabled={busy}
                     value={form.proxy}
                     onChange={(e) => {
                       set("proxy", e.target.value);
                       setTestResult(null);
                     }}
-                    placeholder="支持http或socks5代理"
                   />
                 </div>
-                <CrawlerUploadTargetField
-                  value={form.uploadDriveId}
-                  onChange={(value) => set("uploadDriveId", value)}
-                  uploadTargets={uploadTargets}
-                />
                 <div className="admin-form__row">
                   <label htmlFor="crawler-upload-proxy">上传代理</label>
                   <input
                     id="crawler-upload-proxy"
+                    placeholder="支持 HTTP/HTTPS 和 SOCKS5/SOCKS5H"
+                    disabled={busy}
                     value={form.uploadProxy}
                     onChange={(e) => set("uploadProxy", e.target.value)}
-                    placeholder="仅本地视频上传到网盘时使用"
                   />
                 </div>
               </div>
-            </section>
-          </div>
+            </div>
+          </section>
         </div>
+
+        <section className={`admin-crawler-test-panel${testing ? " is-testing" : ""}`} aria-labelledby="crawler-test-heading" aria-busy={testing}>
+          <header className="admin-crawler-panel__head admin-crawler-test-panel__bar">
+            <span className="admin-crawler-section-number" aria-hidden="true">03</span>
+            <h3 id="crawler-test-heading">测试脚本</h3>
+            <button className="admin-btn" type="button" onClick={test} disabled={!form.scriptPath || busy || !!feedError}>
+              {testing ? "测试中..." : testResult ? "重新测试" : "运行测试"}
+            </button>
+          </header>
+          {testResult && <CrawlerTestResult result={testResult} />}
+        </section>
       </div>
     </Modal>
-  );
-}
-
-function CrawlerEditorSummaryItem({
-  label,
-  value,
-  tone,
-  icon,
-}: {
-  label: string;
-  value: string;
-  tone: "ok" | "error" | "info" | "muted";
-  icon: ReactNode;
-}) {
-  return (
-    <div className={`admin-crawler-editor-status is-${tone}`}>
-      <span className="admin-crawler-editor-status__icon">{tone === "ok" ? <Check size={13} /> : icon}</span>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
   );
 }
 
@@ -969,37 +946,40 @@ function CrawlerTestResult({ result }: { result: api.CrawlerDryRunResult }) {
   const media = result.mediaCheck;
 
   return (
-    <div className={`admin-crawler-test-result ${result.ok ? "is-ok" : "is-error"}`}>
+    <div className={`admin-crawler-test-result ${result.ok ? "is-ok" : "is-error"}`} aria-live="polite">
       <div className="admin-crawler-test-result__head">
-        <span className={`admin-status is-${result.ok ? "ok" : "error"}`}>{result.ok ? "测试通过" : "测试失败"}</span>
-        <span>抓取到 {result.items.length} 条视频</span>
+        <span className={`admin-status is-${result.ok ? "ok" : "error"}`}>{crawlerTestSummary(result)}</span>
+        <span>{result.feedLabel || result.feedId}</span>
+        <span>已解析 {result.items.length} 条样本</span>
         {result.durationMs > 0 && <span>{Math.round(result.durationMs / 1000)} 秒</span>}
       </div>
-
       {failure && <div className="admin-crawler-test-result__error">{failure}</div>}
-
       {item && (
+        <div className="admin-crawler-sample">
+          <span><Play size={17} aria-hidden="true" /></span>
+          <div><small>抓取样本</small><strong>{item.title}</strong></div>
+        </div>
+      )}
+      <details className="admin-crawler-test-result__details">
+        <summary>查看检测详情</summary>
         <div className="admin-crawler-test-result__grid">
-          <CrawlerTestField label="视频名" value={item.title} />
-          <CrawlerTestField label="唯一标识" value={item.sourceId} />
-          <CrawlerTestField label="视频直链" value={item.mediaUrl || item.mediaLocalFile} />
-          <CrawlerTestField label="封面图" value={item.thumbnailUrl} />
-          <CrawlerTestField label="详情页" value={item.detailUrl} />
+          <CrawlerTestField label="抓取栏目" value={result.feedLabel || result.feedId} />
+          <CrawlerTestField label="协议交互" value={result.validated.includes("protocol") ? "已通过" : "未通过"} />
+          <CrawlerTestField label="媒体探测" value={result.validated.includes("media_probe") ? "已通过" : media ? "未通过" : "未验证"} />
+          {item && <>
+            <CrawlerTestField label="唯一标识" value={item.sourceId} />
+            <CrawlerTestField label="视频直链" value={item.mediaUrl} />
+            <CrawlerTestField label="封面图" value={item.thumbnailUrl} />
+            <CrawlerTestField label="详情页" value={item.detailUrl} />
+          </>}
+          {media && <CrawlerTestField label="样本媒体" value={[
+            media.ok ? "检查通过" : "检查失败",
+            media.status ? `HTTP ${media.status}` : "",
+            media.contentType,
+            media.contentLengthBytes ? formatBytes(media.contentLengthBytes) : "",
+          ].filter(Boolean).join(" · ")} />}
         </div>
-      )}
-
-      {media && (
-        <div className="admin-crawler-test-result__media">
-          <span>直链校验</span>
-          <strong>
-            {media.ok ? "可访问" : "不可访问"}
-            {media.status ? ` · HTTP ${media.status}` : ""}
-            {media.contentType ? ` · ${media.contentType}` : ""}
-            {media.contentLengthBytes ? ` · ${formatBytes(media.contentLengthBytes)}` : ""}
-          </strong>
-        </div>
-      )}
-
+      </details>
       {result.log && result.log.length > 0 && (
         <details className="admin-crawler-test-result__log">
           <summary>脚本日志</summary>

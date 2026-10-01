@@ -2,6 +2,7 @@ package nightly
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -291,8 +292,9 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 			rec.push("list-crawler")
 			return []string{"sp-1"}
 		},
-		RunCrawlerCrawl: func(_ context.Context, id string) {
+		RunCrawlerCrawl: func(_ context.Context, id string) error {
 			rec.push("crawl:" + id)
+			return nil
 		},
 		WaitPreviewQueuesIdle: func(context.Context) error {
 			rec.push("wait-idle")
@@ -301,14 +303,6 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 		RunLocalAssetReconciliation: func(context.Context) (int, error) {
 			rec.push("asset-reconciliation")
 			return 2, nil
-		},
-		RunMigration: func(context.Context) error {
-			rec.push("migrate")
-			return nil
-		},
-		RestoreCrawlerVideos: func(_ context.Context, id string) error {
-			rec.push("restore:" + id)
-			return nil
 		},
 		RunDedupeAssetCleanup: func(context.Context) error {
 			rec.push("dedupe-cleanup")
@@ -328,9 +322,6 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 		"wait-idle", // after repaired local assets are admitted
 		"list-crawler",
 		"crawl:sp-1",
-		"wait-idle", // after phase 2
-		"migrate",
-		"restore:sp-1",
 		"dedupe-cleanup",
 	}
 	if len(got) != len(want) {
@@ -408,15 +399,8 @@ func TestRunScanAllOnlyScansConfiguredDrivesAndDedupes(t *testing.T) {
 			rec.push("list-crawler")
 			return []string{"crawler-a"}
 		},
-		RunCrawlerCrawl: func(_ context.Context, id string) {
+		RunCrawlerCrawl: func(_ context.Context, id string) error {
 			rec.push("crawl:" + id)
-		},
-		RunMigration: func(context.Context) error {
-			rec.push("migrate")
-			return nil
-		},
-		RestoreCrawlerVideos: func(_ context.Context, id string) error {
-			rec.push("restore:" + id)
 			return nil
 		},
 		RunDedupeAssetCleanup: func(context.Context) error {
@@ -469,7 +453,7 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 			return scanjob.Result{State: scanjob.Succeeded}
 		},
 		ListCrawlerDrives: func(context.Context) []string { return nil },
-		RunCrawlerCrawl:   func(_ context.Context, id string) { rec.push("crawl:" + id) },
+		RunCrawlerCrawl:   func(_ context.Context, id string) error { rec.push("crawl:" + id); return nil },
 		WaitPreviewQueuesIdle: func(context.Context) error {
 			rec.push("wait-idle")
 			return nil
@@ -477,10 +461,6 @@ func TestRunPipelineSkipsMigrationWhenNoCrawler(t *testing.T) {
 		RunLocalAssetReconciliation: func(context.Context) (int, error) {
 			rec.push("asset-reconciliation")
 			return 0, nil
-		},
-		RunMigration: func(context.Context) error {
-			rec.push("migrate")
-			return nil
 		},
 		RunDedupeAssetCleanup: func(context.Context) error {
 			rec.push("dedupe-cleanup")
@@ -532,13 +512,12 @@ func TestRunPipelineExitsWhenContextCancelledMidPhase(t *testing.T) {
 			return scanjob.Result{State: scanjob.Succeeded}
 		},
 		ListCrawlerDrives:     func(context.Context) []string { return []string{"x"} },
-		RunCrawlerCrawl:       func(context.Context, string) { rec.push("crawl") },
+		RunCrawlerCrawl:       func(context.Context, string) error { rec.push("crawl"); return nil },
 		WaitPreviewQueuesIdle: func(context.Context) error { rec.push("wait-idle"); return nil },
 		RunLocalAssetReconciliation: func(context.Context) (int, error) {
 			rec.push("asset-reconciliation")
 			return 0, nil
 		},
-		RunMigration:          func(context.Context) error { rec.push("migrate"); return nil },
 		RunDedupeAssetCleanup: func(context.Context) error { rec.push("dedupe-cleanup"); return nil },
 	})
 
@@ -618,8 +597,7 @@ func TestCtxCancelPreventsLaterPhases(t *testing.T) {
 			rec.push("list-crawler")
 			return []string{"x"}
 		},
-		RunCrawlerCrawl: func(context.Context, string) { rec.push("crawl") },
-		RunMigration:    func(context.Context) error { rec.push("migrate"); return nil },
+		RunCrawlerCrawl: func(context.Context, string) error { rec.push("crawl"); return nil },
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -804,5 +782,13 @@ func TestTriggerScanAllAcceptsOnlyOneConcurrentRequest(t *testing.T) {
 	}
 	if got := r.Status(); got.State != "queued" || got.Running || !got.Queued {
 		t.Fatalf("status = %#v, want one queued trigger", got)
+	}
+}
+
+func TestScheduledCrawlerFailureReachesRoundResult(t *testing.T) {
+	r := New(Config{Settings: newStubSettings(), ListScanTargets: func(context.Context) ([]string, error) { return nil, nil }, ListCrawlerDrives: func(context.Context) []string { return []string{"crawler"} }, RunCrawlerCrawl: func(context.Context, string) error { return fmt.Errorf("source unavailable") }})
+	r.runPipeline(context.Background())
+	if len(r.issues) != 1 || r.issues[0].Stage != "crawl" {
+		t.Fatalf("crawler failure lost: %+v", r.issues)
 	}
 }

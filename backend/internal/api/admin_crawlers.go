@@ -21,6 +21,7 @@ import (
 
 	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/crawljob"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/persistence"
@@ -28,42 +29,48 @@ import (
 )
 
 type crawlerDTO struct {
-	ID                          string           `json:"id"`
-	Name                        string           `json:"name"`
-	Protocol                    string           `json:"protocol"`
-	Kind                        string           `json:"kind"`
-	Status                      string           `json:"status"`
-	LastError                   string           `json:"lastError,omitempty"`
-	ScriptPath                  string           `json:"scriptPath"`
-	ScriptSourceURL             string           `json:"scriptSourceUrl,omitempty"`
-	Proxy                       string           `json:"proxy,omitempty"`
-	UploadProxy                 string           `json:"uploadProxy,omitempty"`
-	TargetNew                   string           `json:"targetNew,omitempty"`
-	UploadDriveID               string           `json:"uploadDriveId,omitempty"`
-	Paused                      bool             `json:"paused"`
-	LastCrawlAt                 int64            `json:"lastCrawlAt,omitempty"`
-	ScanGenerationStatus        GenerationStatus `json:"scanGenerationStatus"`
-	ThumbnailGenerationStatus   GenerationStatus `json:"thumbnailGenerationStatus"`
-	PreviewGenerationStatus     GenerationStatus `json:"previewGenerationStatus"`
-	FingerprintGenerationStatus GenerationStatus `json:"fingerprintGenerationStatus"`
-	UploadGenerationStatus      GenerationStatus `json:"uploadGenerationStatus"`
-	ThumbnailReadyCount         int              `json:"thumbnailReadyCount"`
-	ThumbnailPendingCount       int              `json:"thumbnailPendingCount"`
-	ThumbnailFailedCount        int              `json:"thumbnailFailedCount"`
-	TeaserReadyCount            int              `json:"teaserReadyCount"`
-	TeaserPendingCount          int              `json:"teaserPendingCount"`
-	TeaserFailedCount           int              `json:"teaserFailedCount"`
-	FingerprintReadyCount       int              `json:"fingerprintReadyCount"`
-	FingerprintPendingCount     int              `json:"fingerprintPendingCount"`
-	FingerprintFailedCount      int              `json:"fingerprintFailedCount"`
-	TotalCrawledCount           int              `json:"totalCrawledCount"`
-	LocalVideoCount             int              `json:"localVideoCount"`
-	MigratedVideoCount          int              `json:"migratedVideoCount"`
+	ID                          string               `json:"id"`
+	Name                        string               `json:"name"`
+	Protocol                    string               `json:"protocol"`
+	Feeds                       []scriptcrawler.Feed `json:"feeds"`
+	SelectedFeedID              string               `json:"selectedFeedId"`
+	Kind                        string               `json:"kind"`
+	Status                      string               `json:"status"`
+	LastError                   string               `json:"lastError,omitempty"`
+	ScriptPath                  string               `json:"scriptPath"`
+	ScriptSourceURL             string               `json:"scriptSourceUrl,omitempty"`
+	Proxy                       string               `json:"proxy,omitempty"`
+	UploadProxy                 string               `json:"uploadProxy,omitempty"`
+	TargetNew                   string               `json:"targetNew,omitempty"`
+	UploadDriveID               string               `json:"uploadDriveId,omitempty"`
+	Paused                      bool                 `json:"paused"`
+	LastCrawlAt                 int64                `json:"lastCrawlAt,omitempty"`
+	ScanGenerationStatus        GenerationStatus     `json:"scanGenerationStatus"`
+	ThumbnailGenerationStatus   GenerationStatus     `json:"thumbnailGenerationStatus"`
+	PreviewGenerationStatus     GenerationStatus     `json:"previewGenerationStatus"`
+	FingerprintGenerationStatus GenerationStatus     `json:"fingerprintGenerationStatus"`
+	UploadGenerationStatus      GenerationStatus     `json:"uploadGenerationStatus"`
+	ThumbnailReadyCount         int                  `json:"thumbnailReadyCount"`
+	ThumbnailPendingCount       int                  `json:"thumbnailPendingCount"`
+	ThumbnailFailedCount        int                  `json:"thumbnailFailedCount"`
+	TeaserReadyCount            int                  `json:"teaserReadyCount"`
+	TeaserPendingCount          int                  `json:"teaserPendingCount"`
+	TeaserFailedCount           int                  `json:"teaserFailedCount"`
+	FingerprintReadyCount       int                  `json:"fingerprintReadyCount"`
+	FingerprintPendingCount     int                  `json:"fingerprintPendingCount"`
+	FingerprintFailedCount      int                  `json:"fingerprintFailedCount"`
+	TotalCrawledCount           int                  `json:"totalCrawledCount"`
+	LocalVideoCount             int                  `json:"localVideoCount"`
+	MigratedVideoCount          int                  `json:"migratedVideoCount"`
 
+	CurrentTask      *crawljob.Result  `json:"currentTask,omitempty"`
+	LastCrawlResult  *crawljob.Result  `json:"lastCrawlResult,omitempty"`
+	ScriptError      string            `json:"scriptError,omitempty"`
 	LastUploadResult *uploadjob.Result `json:"lastUploadResult,omitempty"`
 }
 
 type upsertCrawlerReq struct {
+	SelectedFeedID  *string `json:"selectedFeedId"`
 	ID              string  `json:"id"`
 	ScriptPath      string  `json:"scriptPath"`
 	ScriptSourceURL string  `json:"scriptSourceUrl"`
@@ -94,6 +101,11 @@ func (a *AdminServer) handleListCrawlers(w http.ResponseWriter, r *http.Request)
 		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
+	crawlResults, err := a.Catalog.LatestCrawlerTasks(r.Context())
+	if err != nil {
+		writeErr(w, r, http.StatusInternalServerError, err)
+		return
+	}
 	out := make([]crawlerDTO, 0, len(all))
 	for _, d := range all {
 		if d == nil || !isConfiguredCrawlerDrive(d) {
@@ -107,6 +119,24 @@ func (a *AdminServer) handleListCrawlers(w http.ResponseWriter, r *http.Request)
 		item := a.crawlerDTOForDrive(d, assets, generationStatuses[d.ID])
 		if result, ok := uploadResults[d.ID]; ok {
 			item.LastUploadResult = &result
+		}
+		if result, ok := crawlResults[d.ID]; ok {
+			if result.State == "queued" || result.State == "running" {
+				item.CurrentTask = &result
+				history, err := a.Catalog.ListCrawlerTasks(r.Context(), d.ID, 2)
+				if err != nil {
+					writeErr(w, r, http.StatusInternalServerError, err)
+					return
+				}
+				for _, previous := range history {
+					if previous.TaskID != result.TaskID {
+						item.LastCrawlResult = &previous
+						break
+					}
+				}
+			} else {
+				item.LastCrawlResult = &result
+			}
 		}
 		out = append(out, item)
 	}
@@ -135,12 +165,32 @@ func (a *AdminServer) crawlerDTOForDrive(d *catalog.Drive, assets catalog.Crawle
 			lastCrawlAt = v
 		}
 	}
-	meta := a.crawlerMetadataForDrive(d)
-	scriptPath, _ := a.crawlerScriptPath(d.Credentials)
+	meta := scriptcrawler.Metadata{Name: strings.TrimSpace(d.Name), Feeds: []scriptcrawler.Feed{}}
+	selectedFeedID := d.Credentials["feed_id"]
+	scriptPath, scriptErr := a.crawlerScriptPath(d.Credentials)
+	if scriptErr == nil {
+		var parsed scriptcrawler.Metadata
+		parsed, scriptErr = scriptcrawler.ReadMetadata(scriptPath)
+		if scriptErr == nil {
+			meta = parsed
+			var feed scriptcrawler.Feed
+			feed, scriptErr = meta.ResolveFeed(selectedFeedID)
+			if scriptErr == nil {
+				selectedFeedID = feed.ID
+			}
+		}
+	}
+	scriptError := ""
+	if scriptErr != nil {
+		scriptError = scriptErr.Error()
+	}
 	return crawlerDTO{
 		ID:                          d.ID,
 		Name:                        meta.Name,
 		Protocol:                    meta.Protocol,
+		Feeds:                       meta.Feeds,
+		SelectedFeedID:              selectedFeedID,
+		ScriptError:                 scriptError,
 		Kind:                        d.Kind,
 		Status:                      d.Status,
 		LastError:                   d.LastError,
@@ -193,20 +243,6 @@ func crawlerVideoIDPrefixes(d *catalog.Drive) []string {
 	}
 }
 
-func (a *AdminServer) crawlerMetadataForDrive(d *catalog.Drive) scriptcrawler.Metadata {
-	if d == nil {
-		return scriptcrawler.Metadata{Protocol: scriptcrawler.ProtocolV1}
-	}
-	if d.Credentials != nil {
-		if path, err := a.crawlerScriptPath(d.Credentials); err == nil {
-			if meta, err := scriptcrawler.ReadMetadata(path); err == nil {
-				return meta
-			}
-		}
-	}
-	return scriptcrawler.Metadata{Name: strings.TrimSpace(d.Name), Protocol: scriptcrawler.ProtocolV1}
-}
-
 func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request) {
 	var body upsertCrawlerReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -255,6 +291,13 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 	if body.UploadProxy != nil {
 		incoming["upload_proxy"] = strings.TrimSpace(*body.UploadProxy)
 	}
+	if body.SelectedFeedID != nil {
+		if strings.TrimSpace(*body.SelectedFeedID) == "" {
+			http.Error(w, "请选择抓取栏目", http.StatusBadRequest)
+			return
+		}
+		incoming["feed_id"] = *body.SelectedFeedID
+	}
 	for k, v := range incoming {
 		creds[k] = v
 	}
@@ -298,6 +341,12 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 		http.Error(w, "脚本元信息无效："+err.Error(), http.StatusBadRequest)
 		return
 	}
+	feed, err := meta.ResolveFeed(merged["feed_id"])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	persistedCredentials["feed_id"] = feed.ID
 	name := meta.Name
 	if id == "" {
 		generatedID, err := a.generateCrawlerID(r.Context(), name)
@@ -333,8 +382,8 @@ func (a *AdminServer) handleUpsertCrawler(w http.ResponseWriter, r *http.Request
 		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	// A script can be overwritten in place while script_path stays unchanged;
-	// every crawler save must therefore rebuild its runtime configuration.
+	// Confirmation commits the selected script revision and settings together.
+	// Rebuild the runtime snapshot even when an external script kept its path.
 	deferred, runtimeErr := commitDriveConfigUpdate(configLease, DriveConfigUpdateRuntime, func() error {
 		if a.OnDriveRuntimeConfigChanged == nil {
 			return nil
@@ -424,8 +473,9 @@ type importCrawlerScriptURLReq struct {
 }
 
 type testCrawlerScriptReq struct {
-	ScriptPath string `json:"scriptPath"`
-	Proxy      string `json:"proxy"`
+	ScriptPath     string `json:"scriptPath"`
+	Proxy          string `json:"proxy"`
+	SelectedFeedID string `json:"selectedFeedId"`
 }
 
 // handleTestCrawlerScript 试跑一个爬虫脚本：不入库，抓到第一条视频
@@ -449,6 +499,7 @@ func (a *AdminServer) handleTestCrawlerScript(w http.ResponseWriter, r *http.Req
 	result := scriptcrawler.DryRun(r.Context(), scriptcrawler.DryRunConfig{
 		ScriptPath: scriptPath,
 		ProxyURL:   proxyURL,
+		FeedID:     body.SelectedFeedID,
 	})
 	writeJSON(w, http.StatusOK, result)
 }
@@ -474,7 +525,7 @@ func (a *AdminServer) handleImportCrawlerScriptFile(w http.ResponseWriter, r *ht
 		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
-	// 先读入并校验元信息，再落盘，避免坏脚本覆盖同名旧脚本
+	// Validate before publishing an independent revision for the editor.
 	data, meta, err := readCrawlerScript(file, maxCrawlerScriptBytes)
 	if err != nil {
 		writeErr(w, r, http.StatusBadRequest, err)
@@ -485,7 +536,7 @@ func (a *AdminServer) handleImportCrawlerScriptFile(w http.ResponseWriter, r *ht
 		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol})
+	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol, "feeds": meta.Feeds})
 }
 
 func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *http.Request) {
@@ -542,7 +593,7 @@ func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *htt
 		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
-	// 先读入并校验元信息，再落盘；从原链接更新时远端脚本损坏不会影响本地旧脚本
+	// Link updates also create a revision; they never mutate the active file.
 	data, meta, err := readCrawlerScript(resp.Body, maxCrawlerScriptBytes)
 	if err != nil {
 		writeErr(w, r, http.StatusBadRequest, err)
@@ -553,7 +604,7 @@ func (a *AdminServer) handleImportCrawlerScriptURL(w http.ResponseWriter, r *htt
 		writeErr(w, r, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol, "sourceUrl": downloadURL.String()})
+	writeJSON(w, http.StatusOK, map[string]any{"scriptPath": scriptPath, "name": meta.Name, "protocol": meta.Protocol, "feeds": meta.Feeds, "sourceUrl": downloadURL.String()})
 }
 
 func crawlerScriptDownloadURL(u *url.URL) *url.URL {
@@ -610,57 +661,43 @@ func (a *AdminServer) saveCrawlerScript(ctx context.Context, name string, r io.R
 	if err != nil {
 		return "", err
 	}
+	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) == 0 {
+		return "", errors.New("脚本文件为空")
+	}
+	if int64(len(data)) > maxBytes {
+		return "", fmt.Errorf("脚本文件不能超过 %d KiB", maxBytes/1024)
+	}
 	root, err := a.crawlerScriptImportDir()
 	if err != nil {
+		return "", err
+	}
+	if err := persistence.RLockContext(ctx); err != nil {
+		return "", err
+	}
+	defer persistence.RUnlock()
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
-	dst := filepath.Join(root, fileName)
-	dstAbs, err := filepath.Abs(dst)
+	// A filename is a display/import detail, not a mutable storage identity.
+	// Only handleUpsertCrawler changes which revision a crawler uses. Imports
+	// remain isolated across canceled edits, failed saves and other crawlers.
+	revisionDir, err := os.MkdirTemp(root, "import-")
 	if err != nil {
 		return "", err
 	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
+	dst := filepath.Join(revisionDir, fileName)
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		_ = os.RemoveAll(revisionDir)
 		return "", err
 	}
-	if dstAbs != rootAbs && !strings.HasPrefix(dstAbs, rootAbs+string(os.PathSeparator)) {
-		return "", errors.New("invalid crawler script path")
-	}
-
-	tmp := dstAbs + ".part"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return "", err
-	}
-	limited := io.LimitReader(r, maxBytes+1)
-	written, copyErr := io.Copy(out, limited)
-	closeErr := out.Close()
-	if copyErr != nil {
-		_ = os.Remove(tmp)
-		return "", copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(tmp)
-		return "", closeErr
-	}
-	if written <= 0 {
-		_ = os.Remove(tmp)
-		return "", errors.New("脚本文件为空")
-	}
-	if written > maxBytes {
-		_ = os.Remove(tmp)
-		return "", fmt.Errorf("脚本文件不能超过 %d KiB", maxBytes/1024)
-	}
-	persistence.RLock()
-	defer persistence.RUnlock()
-	if err := os.Rename(tmp, dstAbs); err != nil {
-		_ = os.Remove(tmp)
-		return "", err
-	}
-	return dstAbs, nil
+	return dst, nil
 }
 
 func (a *AdminServer) crawlerScriptImportDir() (string, error) {
@@ -734,15 +771,16 @@ func (a *AdminServer) handleRunCrawler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	accepted := true
-	if a.OnScanRequested != nil {
-		accepted = a.OnScanRequested(r.Context(), id)
+	if a.OnCrawlerRunRequested == nil {
+		writeErr(w, r, http.StatusServiceUnavailable, errors.New("爬虫执行器未配置"))
+		return
 	}
-	resp := map[string]any{"ok": true, "accepted": accepted}
-	if !accepted {
-		resp["message"] = driveTaskBusyMessage
+	taskID, err := a.OnCrawlerRunRequested(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "accepted": false, "message": err.Error()})
+		return
 	}
-	writeJSON(w, http.StatusAccepted, resp)
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "accepted": true, "taskId": taskID})
 }
 
 func (a *AdminServer) handleSetCrawlerPaused(w http.ResponseWriter, r *http.Request) {
@@ -897,4 +935,50 @@ func (a *AdminServer) handleDeleteCrawler(w http.ResponseWriter, r *http.Request
 		resp["warning"] = scriptErr.Error()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *AdminServer) handleListCrawlerTasks(w http.ResponseWriter, r *http.Request) {
+	results, err := a.Catalog.ListCrawlerTasks(r.Context(), chi.URLParam(r, "id"), 100)
+	if err != nil {
+		writeErr(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+func (a *AdminServer) handleGetCrawlerTask(w http.ResponseWriter, r *http.Request) {
+	result, err := a.Catalog.GetCrawlerTask(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "taskID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeErr(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	uploads, err := a.Catalog.CrawlerTaskUploads(r.Context(), result.TaskID)
+	if err != nil {
+		writeErr(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": result, "uploads": uploads})
+}
+func (a *AdminServer) handleCancelCrawlerTask(w http.ResponseWriter, r *http.Request) {
+	result, err := a.Catalog.GetCrawlerTask(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "taskID"))
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeErr(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if result.State != "queued" && result.State != "running" {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "message": "任务已结束"})
+		return
+	}
+	if a.OnCrawlerTaskCancel == nil {
+		writeErr(w, r, http.StatusServiceUnavailable, errors.New("任务取消不可用"))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": a.OnCrawlerTaskCancel(result.DriveID, result.TaskID), "taskId": result.TaskID})
 }

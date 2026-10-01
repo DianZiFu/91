@@ -7,363 +7,351 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
-
-	"github.com/video-site/backend/internal/applog"
 )
 
+var errOperationTimeout = errors.New("crawler operation timed out")
+
+const defaultOperationTimeout = 5 * time.Minute
+
+type sessionConfig struct {
+	PythonPath, ScriptPath, WorkDir, JobPath, ProxyURL string
+	OperationTimeout, StopGrace                        time.Duration
+	MaxStdoutBytes, MaxStderrBytes                     int64
+	Diagnostic                                         func(string)
+}
 type scriptOutput struct {
-	line string
+	line []byte
 	err  error
 }
 
-type doneStats struct {
-	Checked *int `json:"checked"`
-	Emitted *int `json:"emitted"`
+// scriptSession owns a single process and permits one command in flight. It
+// knows nothing about catalog identities, import policy, budgets or uploads.
+type scriptSession struct {
+	cfg        sessionConfig
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     io.ReadCloser
+	output     <-chan scriptOutput
+	wait       chan struct{}
+	waitErr    error
+	closed     chan struct{}
+	closeOnce  sync.Once
+	cancelRead context.CancelFunc
+	mu         sync.Mutex
+	sequence   int
+	logs       *scriptLogTail
 }
 
-func (c *Crawler) executeScript(
-	runCtx context.Context,
-	parentCtx context.Context,
-	jobPath string,
-	targetNew int,
-	candidateBudget int,
-	result *CrawlResult,
-	emit func(CrawlProgress),
-) error {
-	cmd, stdout, err := c.startScript(runCtx, jobPath, targetNew, candidateBudget)
+func startSession(ctx context.Context, cfg sessionConfig) (*scriptSession, error) {
+	if cfg.PythonPath == "" {
+		cfg.PythonPath = "python3"
+	}
+	if cfg.OperationTimeout <= 0 {
+		cfg.OperationTimeout = defaultOperationTimeout
+	}
+	if cfg.StopGrace <= 0 {
+		cfg.StopGrace = time.Second
+	}
+	if cfg.MaxStdoutBytes <= 0 {
+		cfg.MaxStdoutBytes = defaultMaxStdoutBytes
+	}
+	cmd := exec.Command(cfg.PythonPath, cfg.ScriptPath, "--job", cfg.JobPath)
+	setCrawlerProcAttr(cmd)
+	cmd.Dir = cfg.WorkDir
+	cmd.WaitDelay = cfg.StopGrace
+	if cfg.ProxyURL != "" {
+		cmd.Env = append(os.Environ(), "HTTP_PROXY="+cfg.ProxyURL, "HTTPS_PROXY="+cfg.ProxyURL, "http_proxy="+cfg.ProxyURL, "https_proxy="+cfg.ProxyURL, "NO_PROXY=", "no_proxy=")
+	}
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("scriptcrawler: start: %w", err)
+		return nil, err
 	}
-	defer stdout.Close()
-
-	maxLineBytes := maxV1StdoutLineBytes
-	strictV2 := c.protocol == ProtocolV2
-	if strictV2 {
-		maxLineBytes = maxV2StdoutLineBytes
+	// Use an owned pipe: cmd.Wait must not close stdout before the protocol
+	// reader has consumed the final response and checked for extra messages.
+	stdout, writer, err := os.Pipe()
+	if err != nil {
+		stdin.Close()
+		return nil, err
 	}
-	outputCh := scanScriptOutput(runCtx, stdout, maxLineBytes, c.cfg.MaxStdoutBytes)
-
-	runTimeout := c.effectiveRunTimeout()
-	candidateIdleTimeout := c.effectiveCandidateIdleTimeout()
-	var candidateTimer *time.Timer
-	var candidateC <-chan time.Time
-	if candidateIdleTimeout > 0 {
-		candidateTimer = time.NewTimer(candidateIdleTimeout)
-		candidateC = candidateTimer.C
-		defer candidateTimer.Stop()
+	logs := newScriptLogTail(cfg.MaxStderrBytes)
+	logs.onLine = cfg.Diagnostic
+	cmd.Stdout = writer
+	cmd.Stderr = logs
+	if err = cmd.Start(); err != nil {
+		stdin.Close()
+		stdout.Close()
+		writer.Close()
+		return nil, err
 	}
-	var idleTimer *time.Timer
-	var idleC <-chan time.Time
-	if strictV2 {
-		idleTimer = time.NewTimer(c.cfg.IdleTimeout)
-		idleC = idleTimer.C
-		defer idleTimer.Stop()
-	}
-	var doneTimer *time.Timer
-	var doneC <-chan time.Time
-	defer func() {
-		if doneTimer != nil {
-			doneTimer.Stop()
+	writer.Close()
+	readCtx, cancel := context.WithCancel(context.Background())
+	s := &scriptSession{cfg: cfg, cmd: cmd, stdin: stdin, stdout: stdout, wait: make(chan struct{}), closed: make(chan struct{}), cancelRead: cancel, logs: logs}
+	s.output = scanScriptOutput(readCtx, stdout, maxMessageBytes, cfg.MaxStdoutBytes)
+	go func() { s.waitErr = cmd.Wait(); close(s.wait) }()
+	go func() {
+		select {
+		case <-ctx.Done():
+			s.Close()
+		case <-s.closed:
 		}
 	}()
-
-	progress := CrawlProgress{}
-	doneSeen := false
+	return s, nil
+}
+func (s *scriptSession) Close() {
+	s.closeOnce.Do(func() {
+		_ = s.stdin.Close()
+		select {
+		case <-s.wait:
+		default:
+			_ = terminateCrawlerProcess(s.cmd)
+			timer := time.NewTimer(s.cfg.StopGrace)
+			select {
+			case <-s.wait:
+			case <-timer.C:
+			}
+			timer.Stop()
+		}
+		// Also reap descendants that kept pipes open after the parent exited.
+		_ = killCrawlerProcess(s.cmd)
+		_ = s.stdout.Close()
+		s.cancelRead()
+		<-s.wait
+		close(s.closed)
+	})
+}
+func (s *scriptSession) request(ctx context.Context, command map[string]any, expected string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	opCtx, cancel := context.WithTimeoutCause(ctx, s.cfg.OperationTimeout, errOperationTimeout)
+	defer cancel()
+	timeoutError := func() error {
+		if !errors.Is(context.Cause(opCtx), errOperationTimeout) {
+			return opCtx.Err()
+		}
+		return fmt.Errorf("%s: %w: %w", command["type"], errOperationTimeout, opCtx.Err())
+	}
+	if opCtx.Err() != nil {
+		return nil, timeoutError()
+	}
+	s.sequence++
+	id := fmt.Sprintf("request-%d", s.sequence)
+	command["request_id"] = id
+	deadline, _ := opCtx.Deadline()
+	command["deadline_at"] = deadline.UTC().Format(time.RFC3339Nano)
+	data, err := json.Marshal(command)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxMessageBytes {
+		return nil, protocolError("command too large")
+	}
+	wrote := make(chan error, 1)
+	go func() { _, err := s.stdin.Write(append(data, '\n')); wrote <- err }()
+	select {
+	case err := <-wrote:
+		if err != nil {
+			if opCtx.Err() != nil {
+				return nil, timeoutError()
+			}
+			return nil, protocolError("write command: %v", err)
+		}
+	case <-opCtx.Done():
+		err := timeoutError()
+		s.Close()
+		return nil, err
+	}
 	for {
 		select {
-		case <-runCtx.Done():
-			c.stopScript(cmd, stdout)
-			if err := parentCtx.Err(); err != nil {
-				return err
+		case <-opCtx.Done():
+			err := timeoutError()
+			s.Close()
+			return nil, err
+		case out, ok := <-s.output:
+			// Deadline cancellation also closes the process pipes. Preserve the
+			// deadline's cause instead of reporting the resulting EOF as bad output.
+			if opCtx.Err() != nil {
+				err := timeoutError()
+				s.Close()
+				return nil, err
 			}
-			return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", runTimeout)
-
-		case <-candidateC:
-			c.stopScript(cmd, stdout)
-			return fmt.Errorf("scriptcrawler: no item event received for %s", candidateIdleTimeout)
-
-		case <-idleC:
-			c.stopScript(cmd, stdout)
-			return fmt.Errorf("scriptcrawler: %s heartbeat timeout: no item/progress/done event for %s", ProtocolV2, c.cfg.IdleTimeout)
-
-		case <-doneC:
-			c.stopScript(cmd, stdout)
-			return fmt.Errorf("scriptcrawler: %s emitted done but did not exit within %s", ProtocolV2, c.cfg.DoneGrace)
-
-		case output, ok := <-outputCh:
 			if !ok {
-				waitErr := waitForScript(cmd, stdout)
-				if err := parentCtx.Err(); err != nil {
-					return err
-				}
-				if runCtx.Err() != nil {
-					return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", runTimeout)
-				}
-				if waitErr != nil {
-					return fmt.Errorf("scriptcrawler: script exited unsuccessfully: %w", waitErr)
-				}
-				if strictV2 && !doneSeen {
-					return fmt.Errorf("scriptcrawler: %s script exited without a done event", ProtocolV2)
-				}
-				return nil
+				return nil, protocolError("process exited without %s response", expected)
 			}
-			if output.err != nil {
-				c.stopScript(cmd, stdout)
-				return fmt.Errorf("scriptcrawler: stdout protocol violation: %w", output.err)
+			if out.err != nil {
+				return nil, out.err
 			}
-
-			line := strings.TrimSpace(output.line)
-			if line == "" {
-				if strictV2 {
-					c.stopScript(cmd, stdout)
-					return errors.New("scriptcrawler: crawler.v2 stdout contains a blank line")
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(out.line, &fields); err != nil || fields == nil {
+				return nil, protocolError("stdout must contain JSON objects")
+			}
+			var head envelope
+			if err := json.Unmarshal(fields["type"], &head.Type); err != nil {
+				return nil, protocolError("response type is required")
+			}
+			if err := json.Unmarshal(fields["request_id"], &head.RequestID); err != nil || head.RequestID != id {
+				return nil, protocolError("request_id mismatch: expected %s", id)
+			}
+			switch head.Type {
+			case "heartbeat":
+				if err := strictDecode(out.line, &head); err != nil {
+					return nil, err
 				}
 				continue
-			}
-			if strictV2 && doneSeen {
-				c.stopScript(cmd, stdout)
-				return errors.New("scriptcrawler: crawler.v2 emitted output after the terminal done event")
-			}
-
-			var event Event
-			if err := json.Unmarshal([]byte(line), &event); err != nil {
-				if strictV2 {
-					c.stopScript(cmd, stdout)
-					return fmt.Errorf("scriptcrawler: crawler.v2 stdout must contain JSON objects only: %w", err)
+			case "error":
+				var failure ScriptError
+				if err := strictDecode(out.line, &failure); err != nil {
+					return nil, err
 				}
-				applog.Error(runCtx, "Script output parse failed", err, applog.Fields{Stage: "parse_output"})
-				continue
-			}
-
-			eventType := strings.TrimSpace(event.Type)
-			if !strictV2 {
-				eventType = strings.ToLower(eventType)
-			}
-			item := event.normalizedItem()
-			if !strictV2 && eventType == "" && item.hasPayload() {
-				eventType = "item"
-			}
-			switch eventType {
-			case "item":
-				if strictV2 {
-					if err := validateV2Item(item); err != nil {
-						c.stopScript(cmd, stdout)
-						return err
-					}
-					stopTimer(idleTimer)
+				if expected == "stopped" || (failure.Scope != "item" && failure.Scope != "source") || failure.Message == "" || len(failure.Message) > 8192 || failure.RetryAfterSeconds < 0 || failure.RetryAfterSeconds > 86400 || string(fields["retryable"]) == "null" || fields["retryable"] == nil {
+					return nil, protocolError("invalid error response")
 				}
-				// Downloading, fingerprinting and ingesting an item are backend work.
-				// Pause script-silence timers so a slow media download is not blamed on
-				// the crawler process.
-				stopTimer(candidateTimer)
-				result.TotalEntries++
-				progress.Emitted++
-				emit(progress)
-
-				added, itemErr := c.processItem(runCtx, item)
-				if runCtx.Err() != nil {
-					c.stopScript(cmd, stdout)
-					if err := parentCtx.Err(); err != nil {
-						return err
-					}
-					return fmt.Errorf("scriptcrawler: maximum runtime exceeded (%s)", runTimeout)
+				if command["type"] == "discover" && failure.Scope != "source" {
+					return nil, protocolError("discover errors must have source scope")
 				}
-				if itemErr != nil {
-					applog.Error(runCtx, "Crawler item failed: "+item.Title, itemErr, applog.Fields{FileID: item.SourceID, Stage: "import_item"})
-					result.Failed++
-				} else if added {
-					result.NewVideos++
-				} else {
-					result.Skipped++
+				switch failure.Code {
+				case "not_found", "parse_failed", "auth_required", "rate_limited", "source_unavailable":
+				default:
+					return nil, protocolError("unknown error code %q", failure.Code)
 				}
-				emit(progress)
-				resetTimer(candidateTimer, candidateIdleTimeout)
-				if strictV2 {
-					resetTimer(idleTimer, c.cfg.IdleTimeout)
+				return nil, &failure
+			case expected:
+				if expected == "page" && fields["next_cursor"] == nil {
+					return nil, protocolError("page next_cursor is required")
 				}
-
-				if result.NewVideos >= targetNew || result.TotalEntries >= candidateBudget {
-					c.stopScript(cmd, stdout)
-					return nil
-				}
-
-			case "progress":
-				if strictV2 {
-					if event.Checked < 0 || event.Emitted < 0 {
-						c.stopScript(cmd, stdout)
-						return errors.New("scriptcrawler: crawler.v2 progress.checked and progress.emitted cannot be negative")
-					}
-					resetTimer(idleTimer, c.cfg.IdleTimeout)
-				}
-				if event.Checked > 0 {
-					progress.Checked = event.Checked
-				}
-				if event.Emitted > 0 {
-					progress.Emitted = event.Emitted
-				}
-				progress.Message = event.Message
-				emit(progress)
-
-			case "done":
-				if strictV2 {
-					if err := validateDoneStats(event.Stats, result.TotalEntries); err != nil {
-						c.stopScript(cmd, stdout)
-						return err
-					}
-					stopTimer(candidateTimer)
-					idleC = nil
-					stopTimer(idleTimer)
-					doneSeen = true
-					doneTimer = time.NewTimer(c.cfg.DoneGrace)
-					doneC = doneTimer.C
-				}
-				progress.Message = event.Message
-				emit(progress)
-
-			case "":
-				if strictV2 {
-					c.stopScript(cmd, stdout)
-					return errors.New("scriptcrawler: crawler.v2 event is missing type")
-				}
-				log.Printf("[scriptcrawler] drive=%s missing event type line=%q", c.cfg.Driver.ID(), truncateLogValue(line))
-
+				return out.line, nil
 			default:
-				if strictV2 {
-					c.stopScript(cmd, stdout)
-					return fmt.Errorf("scriptcrawler: crawler.v2 unknown event type %q", event.Type)
-				}
-				log.Printf("[scriptcrawler] drive=%s unknown event type=%q", c.cfg.Driver.ID(), event.Type)
+				return nil, protocolError("expected %s, received %q", expected, head.Type)
 			}
 		}
 	}
 }
-
-func scanScriptOutput(ctx context.Context, r io.Reader, maxLineBytes int, maxTotalBytes int64) <-chan scriptOutput {
-	out := make(chan scriptOutput, 4)
+func (s *scriptSession) Discover(ctx context.Context, cursor *string, limit int) (*pageResponse, error) {
+	data, err := s.request(ctx, map[string]any{"type": "discover", "cursor": cursor, "limit": limit}, "page")
+	if err != nil {
+		return nil, err
+	}
+	var page pageResponse
+	if err := strictDecode(data, &page); err != nil {
+		return nil, err
+	}
+	if page.Items == nil || len(page.Items) > limit {
+		return nil, protocolError("page.items must be an array with at most %d candidates", limit)
+	}
+	if page.NextCursor != nil && (!validIdentity(*page.NextCursor) || len(*page.NextCursor) > 512) {
+		return nil, protocolError("invalid next_cursor")
+	}
+	for _, candidate := range page.Items {
+		if err := validateCandidate(candidate); err != nil {
+			return nil, err
+		}
+	}
+	return &page, nil
+}
+func (s *scriptSession) Resolve(ctx context.Context, candidate Candidate) (Item, error) {
+	data, err := s.request(ctx, map[string]any{"type": "resolve", "candidate": candidate}, "item")
+	if err != nil {
+		return Item{}, err
+	}
+	var response itemResponse
+	if err := strictDecode(data, &response); err != nil {
+		return Item{}, err
+	}
+	if err := validateItem(response.Item, candidate); err != nil {
+		return Item{}, err
+	}
+	return response.Item, nil
+}
+func (s *scriptSession) Stop(ctx context.Context, reason string) error {
+	stopCtx, cancel := context.WithTimeout(ctx, s.cfg.StopGrace)
+	defer cancel()
+	data, err := s.request(stopCtx, map[string]any{"type": "stop", "reason": reason}, "stopped")
+	if err != nil {
+		return err
+	}
+	var response envelope
+	if err := strictDecode(data, &response); err != nil {
+		return err
+	}
+	_ = s.stdin.Close()
+	for {
+		select {
+		case <-stopCtx.Done():
+			return protocolError("process did not exit after stopped")
+		case out, ok := <-s.output:
+			if ok {
+				if out.err != nil {
+					return out.err
+				}
+				return protocolError("output after stopped response")
+			}
+			select {
+			case <-s.wait:
+				if s.waitErr != nil {
+					return protocolError("process exit: %v", s.waitErr)
+				}
+				return nil
+			case <-stopCtx.Done():
+				return protocolError("process did not exit after stopped")
+			}
+		}
+	}
+}
+func scanScriptOutput(ctx context.Context, r io.Reader, maxLine int, maxTotal int64) <-chan scriptOutput {
+	out := make(chan scriptOutput, 1)
 	go func() {
 		defer close(out)
-		scanner := bufio.NewScanner(r)
-		initialBufferBytes := 64 * 1024
-		if maxLineBytes < initialBufferBytes {
-			initialBufferBytes = maxLineBytes
-		}
-		scanner.Buffer(make([]byte, initialBufferBytes), maxLineBytes)
+		reader := bufio.NewReaderSize(r, min(maxLine, 64*1024))
 		var total int64
-		for scanner.Scan() {
-			line := scanner.Text()
-			total += int64(len(line)) + 1
-			if total > maxTotalBytes {
-				sendScriptOutput(ctx, out, scriptOutput{err: fmt.Errorf("stdout exceeded %d bytes", maxTotalBytes)})
-				return
-			}
-			if !sendScriptOutput(ctx, out, scriptOutput{line: line}) {
-				return
+		send := func(value scriptOutput) bool {
+			select {
+			case out <- value:
+				return true
+			case <-ctx.Done():
+				return false
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			sendScriptOutput(ctx, out, scriptOutput{err: fmt.Errorf("stdout line exceeds %d bytes or cannot be read: %w", maxLineBytes, err)})
+		var line []byte
+		for {
+			fragment, err := reader.ReadSlice('\n')
+			total += int64(len(fragment))
+			if total > maxTotal {
+				send(scriptOutput{err: protocolError("stdout exceeded %d bytes", maxTotal)})
+				return
+			}
+			if len(line)+len(fragment) > maxLine {
+				send(scriptOutput{err: protocolError("stdout line exceeds %d bytes", maxLine)})
+				return
+			}
+			line = append(line, fragment...)
+			if err == bufio.ErrBufferFull {
+				continue
+			}
+			if len(line) > 0 {
+				if line[len(line)-1] != '\n' {
+					send(scriptOutput{err: protocolError("incomplete JSONL message")})
+					return
+				}
+				if strings.TrimSpace(string(line)) == "" {
+					send(scriptOutput{err: protocolError("empty stdout line")})
+					return
+				}
+				if !send(scriptOutput{line: line}) {
+					return
+				}
+				line = nil
+			}
+			if err != nil {
+				if err != io.EOF {
+					send(scriptOutput{err: protocolError("read stdout: %v", err)})
+				}
+				return
+			}
 		}
 	}()
 	return out
-}
-
-func sendScriptOutput(ctx context.Context, out chan<- scriptOutput, value scriptOutput) bool {
-	select {
-	case out <- value:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
-func validateV2Item(item Item) error {
-	if strings.TrimSpace(item.SourceID) == "" {
-		return errors.New("scriptcrawler: crawler.v2 item.source_id is required")
-	}
-	if normalizeSourceID(item.SourceID) == "" {
-		return errors.New("scriptcrawler: crawler.v2 item.source_id must contain at least one ASCII letter or digit")
-	}
-	if strings.TrimSpace(item.Title) == "" {
-		return errors.New("scriptcrawler: crawler.v2 item.title is required")
-	}
-	if strings.TrimSpace(item.MediaURL) == "" &&
-		strings.TrimSpace(item.MediaLocalFile) == "" &&
-		strings.TrimSpace(item.Media.URL) == "" &&
-		strings.TrimSpace(item.Media.LocalFile) == "" {
-		return errors.New("scriptcrawler: crawler.v2 item.media_url or item.media_local_file is required")
-	}
-	return nil
-}
-
-func validateDoneStats(raw json.RawMessage, expectedEmitted int) error {
-	if len(raw) == 0 || string(raw) == "null" {
-		return errors.New("scriptcrawler: crawler.v2 done.stats is required")
-	}
-	var stats doneStats
-	if err := json.Unmarshal(raw, &stats); err != nil {
-		return fmt.Errorf("scriptcrawler: crawler.v2 done.stats must be an object: %w", err)
-	}
-	if stats.Checked == nil || stats.Emitted == nil {
-		return errors.New("scriptcrawler: crawler.v2 done.stats.checked and done.stats.emitted are required")
-	}
-	if *stats.Checked < 0 || *stats.Emitted < 0 {
-		return errors.New("scriptcrawler: crawler.v2 done.stats values cannot be negative")
-	}
-	if *stats.Checked < *stats.Emitted {
-		return errors.New("scriptcrawler: crawler.v2 done.stats.checked cannot be less than done.stats.emitted")
-	}
-	if *stats.Emitted != expectedEmitted {
-		return fmt.Errorf("scriptcrawler: crawler.v2 done.stats.emitted=%d does not match %d item events", *stats.Emitted, expectedEmitted)
-	}
-	return nil
-}
-
-func (c *Crawler) stopScript(cmd *exec.Cmd, stdout io.Closer) {
-	terminated := killCrawlerProcess(cmd) == nil
-	_ = stdout.Close()
-	if err := cmd.Wait(); err != nil && !isExpectedKilledProcess(err, terminated) {
-		log.Printf("[scriptcrawler] drive=%s wait after stop: %v", c.cfg.Driver.ID(), err)
-	}
-}
-
-func waitForScript(cmd *exec.Cmd, stdout io.Closer) error {
-	_ = stdout.Close()
-	return cmd.Wait()
-}
-
-func resetTimer(timer *time.Timer, duration time.Duration) {
-	if timer == nil {
-		return
-	}
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(duration)
-}
-
-func stopTimer(timer *time.Timer) {
-	if timer == nil {
-		return
-	}
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-}
-
-func truncateLogValue(value string) string {
-	const max = 1024
-	if len(value) <= max {
-		return value
-	}
-	return value[:max] + "…"
 }

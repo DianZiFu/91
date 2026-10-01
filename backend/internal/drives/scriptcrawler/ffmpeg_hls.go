@@ -18,7 +18,7 @@ type ffmpegHLSCapabilities struct {
 	extensionPicky           bool
 }
 
-func (c *Crawler) ffmpegHLSInputOptions(ctx context.Context) []string {
+func (c *Importer) ffmpegHLSInputOptions(ctx context.Context) []string {
 	c.hlsCapsOnce.Do(func() {
 		// Capability discovery should not be permanently poisoned by a canceled
 		// crawl. Bound it independently and cache the result for this crawler.

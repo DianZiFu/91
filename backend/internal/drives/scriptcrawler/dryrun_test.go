@@ -13,214 +13,128 @@ import (
 )
 
 func writeDryRunScript(t *testing.T, body string) string {
-	return writeDryRunProtocolScript(t, "", body)
-}
-
-func writeDryRunProtocolScript(t *testing.T, protocol, body string) string {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "crawler.py")
-	metadata := "#!/bin/sh\nCRAWLER_NAME=\"Dry Run Test\"\n"
-	if protocol != "" {
-		metadata += "CRAWLER_PROTOCOL=\"" + protocol + "\"\n"
+	script := filepath.Join(t.TempDir(), "crawler.py")
+	if err := os.WriteFile(script, []byte("CRAWLER_NAME = 'Dry run'\nCRAWLER_PROTOCOL = 'crawler.v3'\n"+pythonSessionPrelude+body), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(metadata+body), 0o755); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	return path
+	return script
 }
-
-func TestDryRunUsesV2AndStopsAfterFirstItemWithoutDone(t *testing.T) {
-	script := writeDryRunProtocolScript(t, ProtocolV2, `
-echo '{"type":"item","source_id":"v2-item","title":"V2 Video","media_url":"https://cdn.example.test/v2.mp4"}'
-sleep 30
-`)
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
-		ScriptPath:     script,
-		SkipMediaProbe: true,
-	})
-	if !result.OK || result.Protocol != ProtocolV2 || len(result.Items) != 1 {
-		t.Fatalf("result = %+v", result)
-	}
+func dryRunURLScript(url string) string {
+	return fmt.Sprintf(`c=read(); send(c,"page",items=[dict(discovery_key="one",source_id="123",locator={})],next_cursor=None)
+c=read(); send(c,"item",discovery_key="one",source_id="123",title="Test Video",media=dict(type="url",url=%q,headers={"X-Test":"media"}))
+print("diagnostic",file=sys.stderr,flush=True)
+stop()
+`, url)
 }
-
-func TestDryRunV2RejectsDoneStatsMismatch(t *testing.T) {
-	script := writeDryRunProtocolScript(t, ProtocolV2, `
-echo '{"type":"done","stats":{"checked":1,"emitted":1}}'
-`)
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
-		ScriptPath:     script,
-		SkipMediaProbe: true,
-	})
-	if result.OK || !strings.Contains(result.Error, "does not match") {
-		t.Fatalf("result = %+v", result)
+func TestDryRunUsesProductionSessionAndMediaProbe(t *testing.T) {
+	for _, status := range []int{200, 403} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Range") != "bytes=0-0" || r.Header.Get("X-Test") != "media" {
+					t.Error("missing media headers")
+				}
+				w.Header().Set("Content-Type", "video/mp4")
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+			result := DryRun(context.Background(), DryRunConfig{ScriptPath: writeDryRunScript(t, dryRunURLScript(server.URL)), HTTPClient: server.Client()})
+			if result.OK != (status == 200) || len(result.Items) != 1 || result.MediaCheck == nil || result.MediaCheck.Status != status || len(result.Log) == 0 {
+				t.Fatalf("%+v", result)
+			}
+			if status == 200 && strings.Join(result.Validated, ",") != "protocol,media_probe" {
+				t.Fatalf("scope: %v", result.Validated)
+			}
+		})
 	}
 }
-
-func TestDryRunCollectsFirstItem(t *testing.T) {
-	script := writeDryRunScript(t, `
-echo '[log] fetching list page' >&2
-echo '{"type":"item","item":{"title":"Test Video","media_url":"https://cdn.example.test/v.mp4","source_id":"123","thumbnail_url":"https://cdn.example.test/t.jpg"}}'
-echo '{"type":"done","stats":{"emitted":1}}'
-`)
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
-		ScriptPath:     script,
-		SkipMediaProbe: true,
-	})
-	if !result.OK {
-		t.Fatalf("ok = false, error = %q, log = %v", result.Error, result.Log)
-	}
-	if len(result.Items) != 1 {
-		t.Fatalf("items = %d, want 1", len(result.Items))
-	}
-	item := result.Items[0]
-	if item.Title != "Test Video" || item.MediaURL != "https://cdn.example.test/v.mp4" || item.SourceID != "123" {
-		t.Fatalf("item = %+v", item)
-	}
-	if len(result.Log) == 0 || !strings.Contains(result.Log[0], "fetching list page") {
-		t.Fatalf("log tail = %v, want stderr captured", result.Log)
+func TestDryRunDoesNotClearErrorsAfterReceivingItem(t *testing.T) {
+	script := writeDryRunScript(t, strings.Replace(dryRunURLScript("https://example.com/video"), "stop()", "stop(); print('bad output',flush=True)", 1))
+	result := DryRun(context.Background(), DryRunConfig{ScriptPath: script, SkipMediaProbe: true})
+	if result.OK || len(result.Items) != 1 || !strings.Contains(result.Error, "after stopped") {
+		t.Fatalf("%+v", result)
 	}
 }
-
-func TestDryRunCapturesStderrWhenStoppingAfterFirstItem(t *testing.T) {
-	script := writeDryRunScript(t, `
-echo '[log] first item ready' >&2
-echo '{"type":"item","item":{"title":"Early Stop Video","media_url":"https://cdn.example.test/v.mp4","source_id":"early-stop"}}'
-sleep 30
-`)
-	start := time.Now()
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
-		ScriptPath:     script,
-		SkipMediaProbe: true,
-	})
-	if !result.OK {
-		t.Fatalf("ok = false, error = %q, log = %v", result.Error, result.Log)
+func TestDryRunAndProductionRejectSameInvalidItem(t *testing.T) {
+	body := `c=read(); send(c,"page",items=[dict(discovery_key="one",source_id="123",locator={})],next_cursor=None)
+c=read(); send(c,"item",discovery_key="one",source_id="other",title="Changed",media=dict(type="url",url="https://example.com/video"))`
+	dry := DryRun(context.Background(), DryRunConfig{ScriptPath: writeDryRunScript(t, body), SkipMediaProbe: true})
+	crawler := newRuntimeTestCrawler(t, body, ProtocolV3, nil)
+	_, err := crawler.RunOnce(context.Background(), 1)
+	if err == nil || dry.OK || dry.Error != err.Error() {
+		t.Fatalf("dry=%+v production=%v", dry, err)
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("dry run took %s, script was not stopped after first item", elapsed)
+}
+func TestDryRunAndProductionRejectFileMedia(t *testing.T) {
+	for _, fields := range []string{
+		`media=dict(type="file",path="/tmp/video.mp4")`,
+		`media=dict(type="file",url="https://example.com/video.mp4")`,
+		`media=dict(type="url",url="https://example.com/video.mp4",path="/tmp/video.mp4")`,
+		`media=dict(type="url",url="https://example.com/video.mp4"),thumbnail=dict(type="file",path="/tmp/thumb.jpg")`,
+	} {
+		t.Run(fields, func(t *testing.T) {
+			body := `c=read();send(c,"page",items=[dict(discovery_key="one",locator={})],next_cursor=None)
+c=read();send(c,"item",discovery_key="one",source_id="one",title="Removed mode",` + fields + `)
+`
+			dry := DryRun(context.Background(), DryRunConfig{ScriptPath: writeDryRunScript(t, body), SkipMediaProbe: true})
+			crawler := newRuntimeTestCrawler(t, body, ProtocolV3, nil)
+			result, err := crawler.RunOnce(context.Background(), 1)
+			if err == nil || dry.OK || dry.Error != err.Error() || result.StopReason != "protocol_error" {
+				t.Fatalf("dry=%+v production=%+v error=%v", dry, result, err)
+			}
+		})
 	}
-	if len(result.Log) == 0 || !strings.Contains(result.Log[0], "first item ready") {
-		t.Fatalf("log tail = %v, want stderr captured before early stop", result.Log)
+}
+func TestDryRunTimeoutAndOutputBound(t *testing.T) {
+	for _, cfg := range []DryRunConfig{{ScriptPath: writeDryRunScript(t, `time.sleep(30)`), Timeout: 60 * time.Millisecond, StopGrace: time.Millisecond}, {ScriptPath: writeDryRunScript(t, `read(); print("x"*1000,flush=True)`), MaxStdoutBytes: 128}} {
+		r := DryRun(context.Background(), cfg)
+		if r.OK || r.Error == "" {
+			t.Fatalf("%+v", r)
+		}
 	}
 }
 
-func TestDryRunProbesMediaURL(t *testing.T) {
-	var gotRange, gotReferer string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotRange = r.Header.Get("Range")
-		gotReferer = r.Header.Get("Referer")
+func TestMediaHeadersAreIndependentAndDoNotInheritDetailURL(t *testing.T) {
+	received := make(chan http.Header, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Header.Clone()
+		_, _ = w.Write([]byte("media"))
+	}))
+	defer server.Close()
+	cfg := DryRunConfig{HTTPClient: server.Client()}
+	item := DryRunItem{MediaURL: server.URL, DetailURL: "https://example.com/detail"}
+	if check := probeMediaURL(context.Background(), cfg, item, map[string]string{"X-Video": "video"}); !check.OK {
+		t.Fatal(check)
+	}
+	c := NewCrawler(CrawlerConfig{HTTPClient: server.Client()})
+	if _, err := c.downloadAtomic(context.Background(), MediaRef{Type: "url", URL: server.URL, Headers: map[string]string{"X-Thumbnail": "thumbnail"}}, filepath.Join(t.TempDir(), "thumb.jpg")); err != nil {
+		t.Fatal(err)
+	}
+	video, thumbnail := <-received, <-received
+	if video.Get("Referer") != "" || thumbnail.Get("Referer") != "" || video.Get("X-Thumbnail") != "" || thumbnail.Get("X-Video") != "" {
+		t.Fatalf("headers leaked: video=%v thumbnail=%v", video, thumbnail)
+	}
+}
+
+func TestDryRunProbesBeforeStoppingSession(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "stopped")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Errorf("script stopped before media probe: %v", err)
+		}
 		w.Header().Set("Content-Type", "video/mp4")
-		w.Header().Set("Content-Range", "bytes 0-0/4096")
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = w.Write([]byte("x"))
+		fmt.Fprint(w, "video")
 	}))
-	t.Cleanup(srv.Close)
-
-	script := writeDryRunScript(t, fmt.Sprintf(
-		`echo '{"type":"item","title":"Probe Video","media_url":"%s/v.mp4","detail_url":"https://example.test/view"}'`,
-		srv.URL,
-	))
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath: "/bin/sh",
-		ScriptPath: script,
-	})
+	defer server.Close()
+	script := writeDryRunScript(t, fmt.Sprintf(`c=read();send(c,"page",items=[dict(discovery_key="one",locator={})],next_cursor=None)
+c=read();send(c,"item",discovery_key="one",source_id="one",title="Video",media=dict(type="url",url=%q))
+stop();open(%q,"w").write("stopped")
+`, server.URL, marker))
+	result := DryRun(context.Background(), DryRunConfig{ScriptPath: script})
 	if !result.OK {
-		t.Fatalf("ok = false, error = %q, mediaCheck = %+v", result.Error, result.MediaCheck)
+		t.Fatalf("media probe failed: %+v", result)
 	}
-	if result.MediaCheck == nil || !result.MediaCheck.OK {
-		t.Fatalf("mediaCheck = %+v, want ok", result.MediaCheck)
-	}
-	if result.MediaCheck.Status != http.StatusPartialContent || result.MediaCheck.ContentLength != 4096 {
-		t.Fatalf("mediaCheck = %+v, want 206 with total 4096", result.MediaCheck)
-	}
-	if gotRange != "bytes=0-0" || gotReferer != "https://example.test/view" {
-		t.Fatalf("probe headers range=%q referer=%q", gotRange, gotReferer)
-	}
-}
-
-func TestDryRunReportsBrokenMediaURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-	}))
-	t.Cleanup(srv.Close)
-
-	script := writeDryRunScript(t, fmt.Sprintf(
-		`echo '{"type":"item","title":"Dead Link","media_url":"%s/v.mp4"}'`,
-		srv.URL,
-	))
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath: "/bin/sh",
-		ScriptPath: script,
-	})
-	if result.OK {
-		t.Fatal("ok = true, want false for HTTP 403 media url")
-	}
-	if result.MediaCheck == nil || result.MediaCheck.OK || result.MediaCheck.Status != http.StatusForbidden {
-		t.Fatalf("mediaCheck = %+v, want failed 403", result.MediaCheck)
-	}
-	if len(result.Items) != 1 {
-		t.Fatalf("items = %d, want item still returned for debugging", len(result.Items))
-	}
-}
-
-func TestDryRunRejectsNonJSONStdout(t *testing.T) {
-	script := writeDryRunScript(t, `echo 'plain text progress output'`)
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
-		ScriptPath:     script,
-		SkipMediaProbe: true,
-	})
-	if result.OK {
-		t.Fatal("ok = true, want false for non-JSON stdout")
-	}
-	if !strings.Contains(result.Error, "JSON Lines") {
-		t.Fatalf("error = %q, want JSON Lines hint", result.Error)
-	}
-}
-
-func TestDryRunHonorsConfiguredStdoutLimit(t *testing.T) {
-	script := writeDryRunScript(t, `printf '12345678901\n'`)
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
-		ScriptPath:     script,
-		SkipMediaProbe: true,
-		MaxStdoutBytes: 10,
-	})
-	if result.OK || !strings.Contains(result.Error, "10 字节") {
-		t.Fatalf("result = %+v, want configured stdout limit error", result)
-	}
-}
-
-func TestDryRunTimesOut(t *testing.T) {
-	script := writeDryRunScript(t, `sleep 30`)
-	start := time.Now()
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath:     "/bin/sh",
-		ScriptPath:     script,
-		Timeout:        2 * time.Second,
-		SkipMediaProbe: true,
-	})
-	if result.OK {
-		t.Fatal("ok = true, want false on timeout")
-	}
-	if !strings.Contains(result.Error, "超时") {
-		t.Fatalf("error = %q, want timeout message", result.Error)
-	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Fatalf("dry run took %s, script was not killed", elapsed)
-	}
-}
-
-func TestDryRunMissingScript(t *testing.T) {
-	result := DryRun(context.Background(), DryRunConfig{
-		PythonPath: "/bin/sh",
-		ScriptPath: filepath.Join(t.TempDir(), "missing.py"),
-	})
-	if result.OK || result.Error == "" {
-		t.Fatalf("result = %+v, want error for missing script", result)
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("script did not stop: %v", err)
 	}
 }

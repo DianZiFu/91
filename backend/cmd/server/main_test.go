@@ -1412,7 +1412,7 @@ func TestRunCrawlerMigrationAfterManualCrawlRequiresCrawlerUploadTarget(t *testi
 		fingerprintWorkers: map[string]*fingerprint.Worker{},
 	}
 
-	app.runCrawlerMigrationAfterManualCrawl(ctx, "crawler-main")
+	app.finishCrawlerProcessing(ctx, "crawler-main")
 	if migrator.called.Load() != 0 {
 		t.Fatalf("migration called without upload target")
 	}
@@ -1425,7 +1425,7 @@ func TestRunCrawlerMigrationAfterManualCrawlRequiresCrawlerUploadTarget(t *testi
 	if err := cat.UpsertDrive(ctx, d); err != nil {
 		t.Fatalf("set upload target: %v", err)
 	}
-	app.runCrawlerMigrationAfterManualCrawl(ctx, "crawler-main")
+	app.finishCrawlerProcessing(ctx, "crawler-main")
 	if migrator.called.Load() != 1 {
 		t.Fatalf("migration calls = %d, want 1", migrator.called.Load())
 	}
@@ -1445,7 +1445,7 @@ func TestReloadDriveRuntimeDoesNotStartCrawlerUploadMigration(t *testing.T) {
 	t.Cleanup(func() { _ = cat.Close() })
 
 	scriptPath := filepath.Join(root, "crawler.py")
-	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = \"Saved Crawler\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte("CRAWLER_NAME = \"Saved Crawler\"\nCRAWLER_PROTOCOL = 'crawler.v3'\n"), 0o644); err != nil {
 		t.Fatalf("write crawler script: %v", err)
 	}
 	if err := cat.UpsertDrive(ctx, &catalog.Drive{
@@ -4639,6 +4639,10 @@ type serverFakeCrawlerUploadRunner struct {
 func (r *serverFakeCrawlerUploadRunner) RunOnce(context.Context) error {
 	r.called.Add(1)
 	return nil
+}
+
+func (r *serverFakeCrawlerUploadRunner) RunDrive(ctx context.Context, driveID string) error {
+	return r.RunDrives(ctx, []string{driveID})
 }
 
 func (r *serverFakeCrawlerUploadRunner) RunDrives(_ context.Context, driveIDs []string) error {

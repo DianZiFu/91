@@ -3,7 +3,6 @@
 package scriptcrawler
 
 import (
-	"errors"
 	"os/exec"
 	"strconv"
 	"syscall"
@@ -30,20 +29,9 @@ func killCrawlerProcess(cmd *exec.Cmd) error {
 	return cmd.Process.Kill()
 }
 
-// isExpectedKilledProcess reports whether a wait error only reflects the
-// backend's own termination. Windows reports that termination as an ordinary
-// positive exit code — both TerminateProcess and taskkill /F use 1 — so the
-// status cannot be told apart from a script exiting 1 by itself. Whether the
-// backend actually terminated a live process is the only reliable signal.
-func isExpectedKilledProcess(err error, terminated bool) bool {
-	var exitErr *exec.ExitError
-	return terminated && errors.As(err, &exitErr)
-}
-
-func setDryRunProcAttr(cmd *exec.Cmd) {
-	setCrawlerProcAttr(cmd)
-}
-
-func killDryRunProcess(cmd *exec.Cmd) error {
-	return killCrawlerProcess(cmd)
+func terminateCrawlerProcess(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	return exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T").Run()
 }

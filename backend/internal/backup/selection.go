@@ -251,6 +251,10 @@ DELETE FROM videos
 			`DELETE FROM scans WHERE drive_id NOT IN (SELECT id FROM backup_selected_drives)`,
 			`DELETE FROM deleted_videos WHERE drive_id NOT IN (SELECT id FROM backup_selected_drives)`,
 			`DELETE FROM crawler_seen_sources WHERE drive_id NOT IN (SELECT id FROM backup_selected_drives)`,
+			`DELETE FROM crawler_discoveries WHERE drive_id NOT IN (SELECT id FROM backup_selected_drives)`,
+			`DELETE FROM crawler_tasks WHERE drive_id NOT IN (SELECT id FROM backup_selected_drives)`,
+			`DELETE FROM crawler_upload_tasks WHERE drive_id NOT IN (SELECT id FROM backup_selected_drives)`,
+			`DELETE FROM crawler_upload_results WHERE drive_id NOT IN (SELECT id FROM backup_selected_drives)`,
 		} {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				rollback()

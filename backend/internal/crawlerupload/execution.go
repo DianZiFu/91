@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
@@ -42,7 +43,11 @@ func (m *Migrator) run(ctx context.Context, driveIDs []string) error {
 	var failures []error
 	stoppedTargets := make(map[string]error)
 	for _, id := range driveIDs {
-		if err := m.runDrive(ctx, id, stoppedTargets); err != nil {
+		result, err := m.acceptDrive(ctx, id)
+		if err == nil {
+			err = m.runDrive(ctx, id, stoppedTargets, result)
+		}
+		if err != nil {
 			failures = append(failures, err)
 		}
 		if ctx.Err() != nil {
@@ -59,9 +64,10 @@ func (m *Migrator) run(ctx context.Context, driveIDs []string) error {
 // runDrive owns the outcome of a sweep, including failures before the first
 // upload. Persist it before publishing idle and releasing task admission,
 // even after cancellation.
-func (m *Migrator) runDrive(ctx context.Context, driveID string, stoppedTargets map[string]error) (runErr error) {
-	ctx = applog.NewTask(ctx, "crawlerupload", driveID)
-	result := uploadjob.Result{TaskID: applog.ContextFields(ctx).TaskID, DriveID: driveID, StartedAt: time.Now()}
+func (m *Migrator) runDrive(ctx context.Context, driveID string, stoppedTargets map[string]error, result uploadjob.Result) (runErr error) {
+	ctx = applog.WithFields(ctx, applog.Fields{TaskID: result.TaskID, DriveID: driveID, Component: "crawlerupload"})
+	result.State = "running"
+	result.StartedAt = time.Now()
 	applog.Info(ctx, "爬虫上传开始", applog.Fields{})
 	defer func() {
 		if result.TargetDriveID != "" && targetUploadRejected(runErr) {
@@ -124,6 +130,9 @@ func (m *Migrator) runDrive(ctx context.Context, driveID string, stoppedTargets 
 		// Polling clients may stop refreshing as soon as they observe idle.
 		m.reportUploadProgress(UploadProgress{DriveID: driveID, State: "idle"})
 	}()
+	if err := m.cfg.Catalog.SaveCrawlerUploadResult(ctx, result); err != nil {
+		return err
+	}
 	// An admitted task must reach outcome persistence even if it was canceled
 	// before the worker started. Stop before any catalog reads or remote work.
 	if err := ctx.Err(); err != nil {
@@ -363,4 +372,17 @@ func (m *Migrator) uploadWithReconciliation(ctx context.Context, v *catalog.Vide
 		return false, err
 	}
 	return m.migrateOne(ctx, v, plan, parent)
+}
+
+// acceptDrive persists queued before an asynchronous caller reports acceptance.
+func (m *Migrator) acceptDrive(ctx context.Context, driveID string) (uploadjob.Result, error) {
+	result := uploadjob.Result{TaskID: uuid.NewString(), ParentTaskID: applog.ContextFields(ctx).TaskID, DriveID: driveID, State: "queued", AcceptedAt: time.Now()}
+	if m.cfg.Catalog == nil || m.cfg.Registry == nil {
+		return result, errors.New("上传服务未配置")
+	}
+	if err := persistence.RLockContext(ctx); err != nil {
+		return result, err
+	}
+	defer persistence.RUnlock()
+	return result, m.cfg.Catalog.SaveCrawlerUploadResult(ctx, result)
 }

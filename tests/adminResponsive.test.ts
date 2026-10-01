@@ -1481,7 +1481,7 @@ test("admin modals and action footers adapt on mobile", () => {
   // .admin-modal 桌面段已用 `width: min(620px, 100%)`，窄屏自然 100%；mobile 段
   // 只重写 max-height，所以这里断桌面规则即可。
   assert.match(ruleBody(adminCss, ".admin-modal"), /width\s*:\s*min\(\d+px,\s*100%\)/);
-  assert.match(ruleBody(adminCss, ".admin-modal.admin-modal--crawler"), /width\s*:\s*min\(1080px,\s*100%\)/);
+  assert.match(ruleBody(adminCss, ".admin-modal.admin-modal--crawler"), /width\s*:\s*min\(960px,\s*100%\)/);
   assert.match(allRuleBodies(css, ".admin-modal"), /display\s*:\s*flex/);
   assert.match(allRuleBodies(css, ".admin-modal"), /overflow\s*:\s*hidden/);
   assert.match(allRuleBodies(css, ".admin-modal__body"), /overflow-y\s*:\s*auto/);

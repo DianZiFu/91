@@ -160,6 +160,7 @@ type driveUploadProgress struct {
 }
 
 type crawlerUploadRunner interface {
+	RunDrive(context.Context, string) error
 	RunOnce(ctx context.Context) error
 	RunDrives(ctx context.Context, driveIDs []string) error
 	StartDrive(ctx context.Context, driveID string) (<-chan error, bool)

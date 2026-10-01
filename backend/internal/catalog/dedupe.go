@@ -33,6 +33,7 @@ type DuplicateAssetCleanupJob struct {
 }
 
 type CrawlerSourceSeen struct {
+ DiscoveryKey string
 	Kind          string
 	DriveID       string
 	SourceID      string

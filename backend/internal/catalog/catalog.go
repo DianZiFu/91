@@ -1374,13 +1374,13 @@ func (c *Catalog) ListCrawlerSourceIDs(ctx context.Context, kind, driveID string
 	}
 	prefix := kind + "-" + driveID + "-"
 	rows, err := c.db.QueryContext(ctx,
-		`SELECT SUBSTR(id, ?) FROM videos WHERE id LIKE ? || '%'
-		 UNION
-		 SELECT SUBSTR(id, ?) FROM deleted_videos WHERE id LIKE ? || '%'
+		`SELECT SUBSTR(id, ?) FROM videos v WHERE substr(id,1,length(?))=? AND instr(substr(v.id,?), 'v3~')!=1 AND NOT EXISTS(SELECT 1 FROM crawler_seen_sources s WHERE s.canonical_video_id=v.id AND s.kind=? AND s.drive_id=?)
+ UNION
+ SELECT SUBSTR(id, ?) FROM deleted_videos v WHERE substr(id,1,length(?))=? AND instr(substr(v.id,?), 'v3~')!=1 AND NOT EXISTS(SELECT 1 FROM crawler_seen_sources s WHERE s.canonical_video_id=v.id AND s.kind=? AND s.drive_id=?)
 		 UNION
 		 SELECT source_id FROM crawler_seen_sources
 		  WHERE kind = ? AND drive_id = ? AND status IN ('imported', 'duplicate')`,
-		len(prefix)+1, prefix, len(prefix)+1, prefix, kind, driveID)
+		len([]rune(prefix))+1, prefix, prefix, len([]rune(prefix))+1, kind, driveID, len([]rune(prefix))+1, prefix, prefix, len([]rune(prefix))+1, kind, driveID, kind, driveID)
 	if err != nil {
 		return nil, err
 	}
@@ -1399,8 +1399,7 @@ func (c *Catalog) ListCrawlerSourceIDs(ctx context.Context, kind, driveID string
 }
 
 // MarkCrawlerSourceSeen records the outcome for a crawler source item. Duplicate
-// source IDs are included in future seen files so scripts can skip them before
-// the backend downloads the same duplicate content again.
+// source IDs are filtered by the coordinator before resolving or downloading.
 func (c *Catalog) MarkCrawlerSourceSeen(ctx context.Context, kind, driveID, sourceID, status, canonicalVideoID, sampledSHA256 string, size int64) error {
 	return markCrawlerSourceSeen(ctx, c.db, kind, driveID, sourceID, status, canonicalVideoID, sampledSHA256, size)
 }
@@ -3773,6 +3772,9 @@ func (c *Catalog) DeleteDrive(ctx context.Context, id string) error {
 		`DELETE FROM scans WHERE drive_id = ?`,
 		`DELETE FROM crawler_upload_results WHERE drive_id = ?`,
 		`DELETE FROM crawler_seen_sources WHERE drive_id = ?`,
+		`DELETE FROM crawler_discoveries WHERE drive_id = ?`,
+		`DELETE FROM crawler_tasks WHERE drive_id = ?`,
+		`DELETE FROM crawler_upload_tasks WHERE drive_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, query, id); err != nil {
 			return err

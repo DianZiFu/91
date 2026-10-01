@@ -63,7 +63,7 @@ test("retained pages revalidate silently when they become active again", () => {
 
 test("hidden pages suspend recurring and out-of-tree UI work", () => {
   assert.match(drivesSource, /if \(!routeActive\) return;[\s\S]*?setInterval/);
-  assert.match(crawlersSource, /if \(!routeActive \|\| !anyBusy\) return/);
+  assert.match(crawlersSource, /if \(!routeActive\) return;[\s\S]*?setInterval/);
   assert.match(videosSource, /if \(!routeActive \|\| \(trackedRegenCount === 0/);
   assert.match(logsSource, /autoRefresh: autoRefresh && routeActive/);
   assert.match(logsSource, /const fullscreenActive = fullscreen && routeActive/);

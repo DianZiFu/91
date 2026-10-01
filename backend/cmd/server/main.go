@@ -130,6 +130,9 @@ func main() {
 		log.Fatalf("open catalog: %v", err)
 	}
 	defer cat.Close()
+	if err := cat.InterruptCrawlerTasks(context.Background()); err != nil {
+		log.Fatalf("recover crawler tasks: %v", err)
+	}
 	if err := cat.ResetLoginProtection(context.Background()); err != nil {
 		log.Fatalf("reset login protection at startup: %v", err)
 	}
@@ -329,7 +332,7 @@ func main() {
 			return app.reloadDriveRuntime(ctx, driveID)
 		},
 		OnPrepareDriveDelete: func(deleteCtx context.Context, driveID string) error {
-			app.stopDriveTasks(ctx, driveID)
+			app.cancelDriveTasks(ctx, driveID)
 			return app.waitDriveTasksStopped(deleteCtx, driveID)
 		},
 		OnDriveDeleteCleanup: func(cleanupCtx context.Context, driveID string) (int, error) {
@@ -349,6 +352,15 @@ func main() {
 				return app.scheduleScriptCrawlerCrawl(taskCtx, driveID)
 			}
 			return app.scheduleScan(taskCtx, driveID)
+		},
+		OnCrawlerRunRequested: func(requestCtx context.Context, driveID string) (string, error) {
+			return app.startScriptCrawlerCrawl(applog.WithFields(ctx, applog.ContextFields(requestCtx)), driveID)
+		},
+		OnCrawlerTaskCancel: func(driveID, taskID string) bool {
+			app.mu.Lock()
+			crawler := app.scriptCrawlers[driveID]
+			app.mu.Unlock()
+			return crawler != nil && crawler.CancelTask(taskID)
 		},
 		OnCrawlerUploadRequested: func(driveID string) (bool, string) {
 			return app.scheduleManualCrawlerUploadMigration(ctx, driveID)
@@ -454,10 +466,10 @@ func main() {
 		RunCrawlerCrawl:             app.runScriptCrawlerCrawl,
 		WaitPreviewQueuesIdle:       app.waitAllPreviewQueuesIdle,
 		RunLocalAssetReconciliation: app.reconcileLocalGeneratedAssets,
-		RunMigration:                app.runCrawlerUploadMigration,
-		RunTelegramUpload:           app.runTelegramUploadMigration,
-		RestoreCrawlerVideos:        app.restoreScriptCrawlerVideos,
-		RunDedupeAssetCleanup:       app.cleanupDuplicateVideoAssets,
+
+		RunTelegramUpload: app.runTelegramUploadMigration,
+
+		RunDedupeAssetCleanup: app.cleanupDuplicateVideoAssets,
 	})
 	go configManager.Watch(ctx)
 	go app.nightlyRunner.Run(ctx)

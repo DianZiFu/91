@@ -31,9 +31,9 @@ func (m *nearDuplicateMatch) evidence(matchedID, selectedID, selectionReason str
 	return evidence
 }
 
-func (c *Crawler) recordSkippedDuplicate(ctx context.Context, source, canonical *catalog.Video, sourceID string, evidence dedupe.Evidence) error {
+func (c *Importer) recordSkippedDuplicate(ctx context.Context, source, canonical *catalog.Video, sourceID, discoveryKey string, evidence dedupe.Evidence) error {
 	return c.cfg.Catalog.RecordCrawlerDuplicate(ctx, source, canonical, catalog.CrawlerSourceSeen{
-		Kind: Kind, DriveID: c.cfg.Driver.ID(), SourceID: sourceID,
+		Kind: Kind, DriveID: c.cfg.Driver.ID(), SourceID: sourceID, DiscoveryKey: discoveryKey,
 		Status: "duplicate", SampledSHA256: source.SampledSHA256, Size: source.Size,
 	}, evidence)
 }
@@ -42,7 +42,7 @@ func (c *Crawler) recordSkippedDuplicate(ctx context.Context, source, canonical 
 //  1. 标题相似 + 封面 SSIM（同源重发场景）；
 //  2. 内容级：时长几乎相等时比较候选 teaser 与本地新视频的对齐帧
 //     （跨源不同压制场景，标题和封面通常完全对不上）。
-func (c *Crawler) findNearDuplicateVideo(ctx context.Context, source *catalog.Video, sourceThumbPath, sourceVideoPath string) (*nearDuplicateMatch, error) {
+func (c *Importer) findNearDuplicateVideo(ctx context.Context, source *catalog.Video, sourceThumbPath, sourceVideoPath string) (*nearDuplicateMatch, error) {
 	if c == nil || c.cfg.Catalog == nil || source == nil {
 		return nil, nil
 	}
@@ -64,7 +64,7 @@ func (c *Crawler) findNearDuplicateVideo(ctx context.Context, source *catalog.Vi
 	return c.findContentDuplicate(ctx, source, sourceVideoPath, candidates)
 }
 
-func (c *Crawler) findTitleThumbDuplicate(source *catalog.Video, sourceThumbPath string, candidates []*catalog.Video) *nearDuplicateMatch {
+func (c *Importer) findTitleThumbDuplicate(source *catalog.Video, sourceThumbPath string, candidates []*catalog.Video) *nearDuplicateMatch {
 	sourceThumbPath = strings.TrimSpace(sourceThumbPath)
 	commonThumbDir := strings.TrimSpace(c.cfg.CommonThumbDir)
 	if sourceThumbPath == "" || commonThumbDir == "" {
@@ -103,7 +103,7 @@ func (c *Crawler) findTitleThumbDuplicate(source *catalog.Video, sourceThumbPath
 	return nil
 }
 
-func (c *Crawler) findContentDuplicate(ctx context.Context, source *catalog.Video, sourceVideoPath string, candidates []*catalog.Video) (*nearDuplicateMatch, error) {
+func (c *Importer) findContentDuplicate(ctx context.Context, source *catalog.Video, sourceVideoPath string, candidates []*catalog.Video) (*nearDuplicateMatch, error) {
 	sourceVideoPath = strings.TrimSpace(sourceVideoPath)
 	if sourceVideoPath == "" || source.DurationSeconds < mediasim.ContentDuplicateMinDurationSeconds {
 		return nil, nil
@@ -173,7 +173,7 @@ func (c *Crawler) findContentDuplicate(ctx context.Context, source *catalog.Vide
 	return nil, nil
 }
 
-func (c *Crawler) loadCandidateTeaserSignature(ctx context.Context, videoID, teaserPath string) (*mediasim.FrameSignature, error) {
+func (c *Importer) loadCandidateTeaserSignature(ctx context.Context, videoID, teaserPath string) (*mediasim.FrameSignature, error) {
 	localDir := strings.TrimSpace(c.cfg.LocalPreviewDir)
 	cachePath := ""
 	if localDir != "" {

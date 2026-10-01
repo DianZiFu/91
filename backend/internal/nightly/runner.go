@@ -95,9 +95,9 @@ type Config struct {
 	// Returns empty slice when no crawler is configured.
 	ListCrawlerDrives func(ctx context.Context) []string
 
-	// RunCrawlerCrawl synchronously runs one crawl cycle (downloads + thumbs +
-	// preview-video enqueue) for a single crawler drive.
-	RunCrawlerCrawl func(ctx context.Context, driveID string)
+	// RunCrawlerCrawl runs the same admitted crawl, generation and upload task
+	// as manual execution and returns its final error.
+	RunCrawlerCrawl func(ctx context.Context, driveID string) error
 
 	// WaitPreviewQueuesIdle blocks until both the thumbnail and preview-video queues
 	// across all drives are drained (queue empty + no in-flight task). It must
@@ -110,16 +110,9 @@ type Config struct {
 	// the number of generated asset references reset across both asset types.
 	RunLocalAssetReconciliation func(ctx context.Context) (int, error)
 
-	// RunMigration runs crawlerupload.Migrator.RunOnce for Phase 3.
-	RunMigration func(ctx context.Context) error
-
 	// RunTelegramUpload is independent of crawler configuration and runs only
 	// in the scheduled/full pipeline, never during a manual scan-all.
 	RunTelegramUpload func(ctx context.Context) error
-
-	// RestoreCrawlerVideos scans one crawler's retained local source directory
-	// after new-video generation and upload have completed.
-	RestoreCrawlerVideos func(ctx context.Context, driveID string) error
 
 	// RunDedupeAssetCleanup runs full-library duplicate video maintenance. It
 	// removes duplicate catalog rows and local generated assets, but never
@@ -594,8 +587,8 @@ func (r *Runner) runPipeline(ctx context.Context) {
 		crawlerIDs = r.cfg.ListCrawlerDrives(ctx)
 	}
 	if len(crawlerIDs) == 0 {
-		log.Printf("[nightly] phase 2/3 skipped: no crawler configured")
-		r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
+		log.Printf("[nightly] crawler phase skipped: no crawler configured")
+		r.runDedupeAssetCleanupPhase(ctx, "nightly", "dedupe")
 		return
 	}
 	log.Printf("[nightly] phase 2: crawling %d crawler drive(s)", len(crawlerIDs))
@@ -605,40 +598,12 @@ func (r *Runner) runPipeline(ctx context.Context) {
 			return
 		}
 		log.Printf("[nightly] phase 2: crawling drive=%s", id)
-		r.cfg.RunCrawlerCrawl(ctx, id)
-	}
-	log.Printf("[nightly] phase 2: waiting for teaser queue to drain")
-	if err := r.waitIdle(ctx, "nightly", "phase 2"); err != nil {
-		return
-	}
-
-	// ---------- Phase 3 ----------
-	if r.shouldStop(ctx, "nightly", "phase 3") {
-		return
-	}
-	log.Printf("[nightly] phase 3: crawler upload")
-	if r.cfg.RunMigration != nil {
-		if err := r.cfg.RunMigration(ctx); err != nil {
-			log.Printf("[nightly] phase 3 migration: %v", err)
-			r.recordIssue("migration", err)
+		if err := r.cfg.RunCrawlerCrawl(ctx, id); err != nil {
+			r.recordIssue("crawl", fmt.Errorf("crawler %s: %w", id, err))
 		}
 	}
 
-	// ---------- Phase 4 ----------
-	if r.shouldStop(ctx, "nightly", "phase 4") {
-		return
-	}
-	if r.cfg.RestoreCrawlerVideos != nil {
-		log.Printf("[nightly] phase 4: restoring retained crawler videos")
-		for _, id := range crawlerIDs {
-			if err := r.cfg.RestoreCrawlerVideos(ctx, id); err != nil {
-				log.Printf("[nightly] phase 4 restore drive=%s: %v", id, err)
-				r.recordIssue("restore", err)
-			}
-		}
-	}
-
-	r.runDedupeAssetCleanupPhase(ctx, "nightly", "phase 5")
+	r.runDedupeAssetCleanupPhase(ctx, "nightly", "dedupe")
 }
 
 // runScanAllPipeline is the manual admin workflow: configured cloud drives are

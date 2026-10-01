@@ -7,10 +7,12 @@ export function CrawlerUploadTargetField({
   value,
   onChange,
   uploadTargets,
+  disabled = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   uploadTargets: api.AdminDrive[];
+  disabled?: boolean;
 }) {
   const targetId = useId();
 
@@ -22,6 +24,7 @@ export function CrawlerUploadTargetField({
           id={targetId}
           className="admin-form-select"
           value={value}
+          disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
         >
           <option value="">本地保存，不上传</option>

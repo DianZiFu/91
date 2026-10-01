@@ -42,8 +42,9 @@ async function request<T>(
     const text = await res.text().catch(() => "");
     let message = text;
     try {
-      const parsed = JSON.parse(text) as { error?: unknown };
+      const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
       if (typeof parsed.error === "string") message = parsed.error;
+      else if (typeof parsed.message === "string") message = parsed.message;
     } catch {
       // Keep a plain-text error response as-is.
     }
@@ -650,11 +651,23 @@ export function stopDriveTasks(id: string) {
 
 // ---------- Crawlers ----------
 
+export type CrawlerTaskResult = {
+  taskId: string;
+  feedId?: string;
+  feedLabel?: string;
+  stopRequested?: boolean;
+  state: "queued" | "running" | "completed" | "partial" | "failed" | "canceled" | "interrupted";
+  stage: string;
+  checked: number;
+  newVideos: number;
+  message?: string;
+};
+
 export type CrawlerUploadResult = {
   taskId: string;
   driveId: string;
   targetDriveId: string;
-  state: "succeeded" | "partial" | "blocked" | "failed" | "canceled";
+  state: "queued" | "running" | "succeeded" | "partial" | "blocked" | "failed" | "canceled" | "interrupted";
   startedAt: string;
   finishedAt: string;
   candidateCount: number;
@@ -668,10 +681,18 @@ export type CrawlerUploadResult = {
   issues?: Array<{ videoId?: string; title?: string; stage: string; reason: string; message: string }>;
 };
 
+export type CrawlerFeed = {
+  id: string;
+  label: string;
+  default?: boolean;
+};
+
 export type AdminCrawler = {
   id: string;
   name: string;
   kind: "scriptcrawler";
+  feeds: CrawlerFeed[];
+  selectedFeedId: string;
   status: string;
   lastError?: string;
   scriptPath: string;
@@ -688,6 +709,9 @@ export type AdminCrawler = {
   fingerprintGenerationStatus?: DriveGenerationStatus;
   uploadGenerationStatus?: DriveGenerationStatus;
   lastUploadResult?: CrawlerUploadResult;
+  currentTask?: CrawlerTaskResult;
+  lastCrawlResult?: CrawlerTaskResult;
+  scriptError?: string;
   thumbnailReadyCount: number;
   thumbnailPendingCount: number;
   thumbnailFailedCount: number;
@@ -704,6 +728,7 @@ export type AdminCrawler = {
 
 export type UpsertCrawlerInput = {
   id?: string;
+  selectedFeedId: string;
   scriptPath: string;
   scriptSourceUrl?: string;
   proxy?: string;
@@ -715,6 +740,7 @@ export type UpsertCrawlerInput = {
 export type ImportCrawlerScriptResult = {
   scriptPath: string;
   name: string;
+  feeds: CrawlerFeed[];
   sourceUrl?: string;
 };
 
@@ -722,7 +748,6 @@ export type CrawlerDryRunItem = {
   title: string;
   sourceId?: string;
   mediaUrl?: string;
-  mediaLocalFile?: string;
   thumbnailUrl?: string;
   detailUrl?: string;
 };
@@ -737,6 +762,9 @@ export type CrawlerDryRunMediaCheck = {
 
 export type CrawlerDryRunResult = {
   ok: boolean;
+  feedId?: string;
+  feedLabel?: string;
+  validated: Array<"protocol" | "media_probe">;
   items: CrawlerDryRunItem[];
   mediaCheck?: CrawlerDryRunMediaCheck;
   error?: string;
@@ -771,7 +799,7 @@ export function importCrawlerScriptURL(url: string) {
   });
 }
 
-export function testCrawlerScript(body: { scriptPath: string; proxy?: string }) {
+export function testCrawlerScript(body: { scriptPath: string; proxy?: string; selectedFeedId: string }) {
   return request<CrawlerDryRunResult>("/crawlers/test-script", {
     method: "POST",
     body: JSON.stringify(body),

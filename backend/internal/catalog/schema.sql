@@ -199,8 +199,8 @@ CREATE INDEX IF NOT EXISTS idx_duplicate_records_canonical
 CREATE INDEX IF NOT EXISTS idx_duplicate_records_video_outcome
     ON duplicate_records(video_id, outcome);
 
--- 爬虫来源记录。用于把已确认重复的 source_id 写回 seen 列表，
--- 避免后续爬虫反复下载同一个候选视频。
+-- 爬虫源身份和处理结果。协调器在请求详情前查询，
+-- 与发现标识关联一起避免反复解析、下载已处理内容。
 CREATE TABLE IF NOT EXISTS crawler_seen_sources (
     kind               TEXT NOT NULL,
     drive_id           TEXT NOT NULL,
@@ -380,4 +380,28 @@ CREATE TABLE IF NOT EXISTS telegram_settings (
 CREATE TABLE IF NOT EXISTS crawler_upload_results (
   drive_id TEXT PRIMARY KEY,
   result TEXT NOT NULL
+);
+
+-- Discovery aliases are typed and scoped; failures never enter this table.
+CREATE TABLE IF NOT EXISTS crawler_discoveries (
+    drive_id TEXT NOT NULL,
+    discovery_key TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    PRIMARY KEY (drive_id, discovery_key)
+);
+CREATE TABLE IF NOT EXISTS crawler_tasks (
+    task_id TEXT PRIMARY KEY,
+    drive_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    result TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_crawler_tasks_drive ON crawler_tasks(drive_id, accepted_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_crawler_tasks_active ON crawler_tasks(drive_id)
+    WHERE state IN ('queued', 'running');
+CREATE TABLE IF NOT EXISTS crawler_upload_tasks (
+    task_id TEXT PRIMARY KEY,
+    drive_id TEXT NOT NULL,
+    parent_task_id TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL
 );
