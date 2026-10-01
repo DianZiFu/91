@@ -1,12 +1,47 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { loadConfigFromFile } from "vite";
 
 const deploy = readFileSync(new URL("../deploy.sh", import.meta.url), "utf8");
+
+test("Docker frontend inputs can load the complete Vite build configuration", async (t) => {
+  const repository = fileURLToPath(new URL("../", import.meta.url));
+  const directory = mkdtempSync(join(tmpdir(), "91-docker-frontend-inputs-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const dockerfile = readFileSync(join(repository, "Dockerfile"), "utf8");
+  const frontend = dockerfile.split(/^FROM\s+/m)[1];
+  assert.ok(frontend, "Dockerfile contains a frontend build stage");
+
+  // Materialize the same local inputs as the frontend stage. Resolving the
+  // actual config catches missing helper imports when build tooling changes.
+  for (const line of frontend.split("\n")) {
+    const copy = line.match(/^COPY\s+(.+)/);
+    if (!copy) continue;
+    const paths = copy[1].trim().split(/\s+/);
+    const target = join(directory, paths.pop()!);
+    mkdirSync(target, { recursive: true });
+    for (const source of paths) {
+      const origin = join(repository, source);
+      const destination = statSync(origin).isDirectory()
+        ? target
+        : join(target, source);
+      cpSync(origin, destination, { recursive: true });
+    }
+  }
+  symlinkSync(join(repository, "node_modules"), join(directory, "node_modules"), "dir");
+  const loaded = await loadConfigFromFile(
+    { command: "build", mode: "production" },
+    join(directory, "vite.config.ts"),
+    directory
+  );
+  assert.ok(loaded, "Vite config loads from Docker's copied inputs");
+  await Promise.all((loaded.config.plugins ?? []).flat(Infinity));
+});
 
 test("systemd deployment serves built frontend assets from the backend", () => {
   assert.match(
