@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -86,6 +88,15 @@ func (g *finishingGenerator) GenerateThumbnail(ctx context.Context, _ *drives.St
 }
 
 func TestPausedCrawlerFinishesGenerationAndUpload(t *testing.T) {
+	// Build a native probe stub once so every scenario works without a shell.
+	probe := filepath.Join(t.TempDir(), "ffprobe")
+	if runtime.GOOS == "windows" {
+		probe += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", probe, "./testdata/ffprobe").CombinedOutput(); err != nil {
+		t.Fatalf("build ffprobe stub: %v\n%s", err, out)
+	}
+
 	for _, mode := range []string{"import", "generation", "upload", "upload_failure", "local_only", "preview_disabled", "pending_config"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -109,10 +120,6 @@ c=read()
 assert c["type"]=="stop", "must not resolve the next video"
 send(c,"stopped")
 `), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			probe := filepath.Join(root, "ffprobe")
-			if err := os.WriteFile(probe, []byte("#!/bin/sh\necho video\n"), 0o700); err != nil {
 				t.Fatal(err)
 			}
 			source := scriptcrawler.New(scriptcrawler.Config{ID: "crawler", RootDir: filepath.Join(root, "source")})
