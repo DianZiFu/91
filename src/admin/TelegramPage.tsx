@@ -20,8 +20,8 @@ import { useTelegramAvailability } from "./telegram/useTelegramAvailability";
 import { TelegramUploadSettings } from "./telegram/TelegramUploadSettings";
 import "@/styles/telegram.css";
 
-const RECENT_IMPORT_LIMIT = 50;
-const IMPORT_PAGE_SIZE = 10;
+const RECENT_IMPORT_LIMIT = 32;
+const IMPORT_PAGE_SIZE = 8;
 const activeImportStates = new Set([
   "queued",
   "downloading",
@@ -310,12 +310,6 @@ function TelegramWorkspace() {
                   {job.senderId && <span>用户{job.senderId}</span>}
                   {job.retryCount > 0 && <span>已重试 {job.retryCount} 次</span>}
                 </div>
-                {job.state === "downloading" && (
-                  <p className="tg-note">
-                    <Loader2 className="tg-spin" size={13} />
-                    正在获取文件，大视频可能需要几分钟。
-                  </p>
-                )}
                 {job.error && <p className="tg-error">{job.error}</p>}
               </div>
               <span className={`tg-job-status tg-job-status--${job.state}`}>
