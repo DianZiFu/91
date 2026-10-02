@@ -78,6 +78,8 @@ function useResponsiveGridColumns(active: boolean): number {
     const update = () => setColumns(readResponsiveGridColumns());
     mobile.addEventListener("change", update);
     tablet.addEventListener("change", update);
+    // Catch viewport changes that happened while the listing was inactive.
+    update();
     return () => {
       mobile.removeEventListener("change", update);
       tablet.removeEventListener("change", update);
