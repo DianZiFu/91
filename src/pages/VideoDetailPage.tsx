@@ -34,6 +34,7 @@ import {
   updateVideoTags,
 } from "@/data/videos";
 import { useAuth } from "@/admin/AuthContext";
+import { AdminEmptyVisual } from "@/admin/AdminEmptyVisual";
 import { useDocumentScrollLock } from "@/lib/useDocumentScrollLock";
 import { useNativeBackHandler } from "@/lib/useNativeBack";
 import { resolveVideoReturnPath } from "@/lib/videoReturnPath";
@@ -470,13 +471,11 @@ function VideoDetailContent({ id }: { id?: string }) {
   if (!detail) {
     return (
       <AppShell mobileAutoHideNav>
-        <div className="vd-page">
+        <div className={detailError ? "vd-page" : "vd-page vd-page--empty"}>
           <div className="container vd-page__inner">
-            <div className="vd-empty">
-              <div>
-                {detailError || "视频不存在或已被移除"}
-              </div>
-              {detailError && (
+            {detailError ? (
+              <div className="vd-empty">
+                <div>{detailError}</div>
                 <button
                   className="vd-empty__retry"
                   type="button"
@@ -484,8 +483,14 @@ function VideoDetailContent({ id }: { id?: string }) {
                 >
                   重试
                 </button>
-              )}
-            </div>
+              </div>
+            ) : (
+              <AdminEmptyVisual
+                variant="no-results"
+                text="视频不存在或已被移除"
+                className="admin-empty-state admin-empty-state--plain vd-empty-state"
+              />
+            )}
           </div>
         </div>
       </AppShell>
