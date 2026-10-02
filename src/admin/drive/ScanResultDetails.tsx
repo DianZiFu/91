@@ -24,6 +24,10 @@ export function ScanResultDetails({
   loading?: boolean;
 }) {
   const result = scanning ? undefined : completedResult;
+  const metrics = result && {
+    ...result,
+    skippedCount: result.duplicateCount + result.tombstonedCount,
+  };
   const finishedAt = result ? new Date(result.finishedAt) : null;
   const validFinishedAt = finishedAt && Number.isFinite(finishedAt.getTime()) ? finishedAt : null;
   const StatusIcon = result ? outcomeIcons[result.state] : null;
@@ -55,7 +59,7 @@ export function ScanResultDetails({
       {result || loading ? (
         <dl className="admin-scan-result__metrics">
           {scanResultMetrics.map(({ key, label }) => {
-            const value = loading ? undefined : result?.[key];
+            const value = loading ? undefined : metrics?.[key];
             const valueClass = key === "errorCount" && value != null && value > 0 ? "is-error" : value === 0 ? "is-zero" : undefined;
             return (
               <div className="admin-scan-result__metric" key={key}>

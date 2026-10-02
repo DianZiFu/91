@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"path/filepath"
@@ -99,6 +100,135 @@ func TestScanReportsAndPersistsPartialDiscovery(t *testing.T) {
 	if app.driveHasActiveWork(drv.ID()) {
 		t.Fatal("finished results must not keep the drive busy")
 	}
+}
+
+func TestScanRetainsCleanupCountAfterDeletionFailure(t *testing.T) {
+	for _, stage := range []string{"missing", "skip policy", "legacy skip policy"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "catalog.db")
+			cat, err := catalog.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cat.Close() })
+			driveConfig := &catalog.Drive{ID: "cleanup-drive", Kind: "fake", Name: "Cleanup", RootID: "root"}
+			ancestors := []string{"root"}
+			parentID := "root"
+			if stage != "missing" {
+				driveConfig.SkipDirIDs = []string{"skip-dir"}
+				ancestors = []string{"root", "skip-dir", "deep"}
+				parentID = "deep"
+			}
+			if stage == "legacy skip policy" {
+				ancestors = nil
+			}
+			if err := cat.UpsertDrive(ctx, driveConfig); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			for _, id := range []string{"cleanup-a", "cleanup-b"} {
+				if err := cat.UpsertVideo(ctx, &catalog.Video{
+					ID: id, DriveID: driveConfig.ID, FileID: id, FileName: id + ".mp4",
+					ParentID: parentID, AncestorDirIDs: ancestors, Title: id, Size: 123,
+					PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			if _, err := db.ExecContext(ctx, `
+CREATE TRIGGER fail_second_cleanup
+BEFORE DELETE ON videos
+WHEN OLD.id = 'cleanup-b'
+BEGIN
+  SELECT RAISE(FAIL, 'forced cleanup failure');
+END`); err != nil {
+				t.Fatal(err)
+			}
+			drv := &serverTreeScanDrive{id: driveConfig.ID, entries: map[string][]drives.Entry{
+				"root":     {{ID: "skip-dir", Name: "Skipped", IsDir: true}},
+				"skip-dir": {{ID: "deep", Name: "Deep", IsDir: true}},
+				"deep":     {},
+			}}
+			registry := proxy.NewRegistry()
+			registry.Set(drv.ID(), drv)
+			app := &App{cat: cat, registry: registry, cfg: &config.Config{
+				Scanner: config.Scanner{VideoExtensions: []string{".mp4"}},
+				Storage: config.Storage{LocalPreviewDir: t.TempDir()},
+			}}
+			result := app.runScan(ctx, drv.ID())
+			if result.State != scanjob.Partial || result.CleanedCount != 1 || result.ErrorCount != 1 {
+				t.Fatalf("result = %+v, want 1 cleaned video and 1 error", result)
+			}
+			if _, err := cat.GetVideo(ctx, "cleanup-a"); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("first video lookup = %v, want successful deletion", err)
+			}
+			if _, err := cat.GetVideo(ctx, "cleanup-b"); err != nil {
+				t.Fatalf("failed deletion removed the second video: %v", err)
+			}
+			stored, err := cat.LatestScanResults(ctx)
+			if err != nil || stored[drv.ID()].CleanedCount != 1 {
+				t.Fatalf("stored result = %+v, err = %v", stored, err)
+			}
+		})
+	}
+}
+
+func TestScanRetainsCleanupCountAfterCancellation(t *testing.T) {
+	app, base := scanResultTestApp(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := app.cat.SetDriveSkipDirIDs(ctx, base.ID(), []string{"skip-dir"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, video := range []*catalog.Video{
+		{
+			ID: "exact-video", FileID: "exact-file", FileName: "exact.mp4",
+			ParentID: "skip-dir", AncestorDirIDs: []string{"root", "skip-dir"},
+		},
+		{
+			ID: "legacy-video", FileID: "legacy-file", FileName: "legacy.mp4", ParentID: "deep",
+		},
+	} {
+		video.DriveID = base.ID()
+		video.Size = 123
+		video.PublishedAt = now
+		video.CreatedAt = now
+		video.UpdatedAt = now
+		if err := app.cat.UpsertVideo(ctx, video); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base.entries["root"] = []drives.Entry{{ID: "skip-dir", Name: "Skipped", IsDir: true}}
+	drv := &cleanupCancelingDrive{serverTreeScanDrive: base, cancel: cancel}
+	app.registry.Set(drv.ID(), drv)
+	result := app.runScan(ctx, drv.ID())
+	if result.State != scanjob.Canceled || result.CleanedCount != 1 {
+		t.Fatalf("canceled result = %+v, want 1 cleaned video", result)
+	}
+	stored, err := app.cat.LatestScanResults(context.Background())
+	if err != nil || stored[drv.ID()].State != scanjob.Canceled || stored[drv.ID()].CleanedCount != 1 {
+		t.Fatalf("stored result = %+v, err = %v", stored, err)
+	}
+}
+
+type cleanupCancelingDrive struct {
+	*serverTreeScanDrive
+	cancel context.CancelFunc
+}
+
+func (d *cleanupCancelingDrive) List(ctx context.Context, dirID string) ([]drives.Entry, error) {
+	if dirID == "skip-dir" {
+		d.cancel()
+		return nil, ctx.Err()
+	}
+	return d.serverTreeScanDrive.List(ctx, dirID)
 }
 
 type finalPassScanDrive struct {

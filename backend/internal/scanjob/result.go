@@ -29,6 +29,7 @@ type Result struct {
 	UpdatedCount    int       `json:"updatedCount"`
 	DuplicateCount  int       `json:"duplicateCount"`
 	TombstonedCount int       `json:"tombstonedCount"`
+	CleanedCount    int       `json:"cleanedCount"`
 	ErrorCount      int       `json:"errorCount"`
 	Message         string    `json:"message,omitempty"`
 	Issues          []Issue   `json:"issues,omitempty"`

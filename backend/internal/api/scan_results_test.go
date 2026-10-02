@@ -23,7 +23,7 @@ func TestDriveListExposesLastScanResultWithoutOverridingActiveProgress(t *testin
 		t.Fatal(err)
 	}
 	now := time.Now()
-	result := scanjob.Result{DriveID: "drive", State: scanjob.Partial, StartedAt: now, FinishedAt: now, ScannedCount: 7, AddedCount: 2, ErrorCount: 1, Issues: []scanjob.Issue{{Stage: "discovery", Message: "subdirectory unavailable"}}}
+	result := scanjob.Result{DriveID: "drive", State: scanjob.Partial, StartedAt: now, FinishedAt: now, ScannedCount: 7, AddedCount: 2, CleanedCount: 3, ErrorCount: 1, Issues: []scanjob.Issue{{Stage: "discovery", Message: "subdirectory unavailable"}}}
 	if err := cat.SaveScanResult(ctx, result); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestDriveListExposesLastScanResultWithoutOverridingActiveProgress(t *testin
 			if rows[0].Scan.State != "scanning" || rows[0].Scan.ScannedCount != 3 || rows[0].Scan.Result != nil {
 				t.Fatalf("active status overwritten: %+v", rows[0].Scan)
 			}
-		} else if rows[0].Scan.State != "partial" || rows[0].Scan.Result == nil || rows[0].Scan.Result.ErrorCount != 1 || rows[0].Scan.AddedCount != 2 {
+		} else if rows[0].Scan.State != "partial" || rows[0].Scan.Result == nil || rows[0].Scan.Result.ErrorCount != 1 || rows[0].Scan.Result.CleanedCount != 3 || rows[0].Scan.AddedCount != 2 {
 			t.Fatalf("finished result missing: %+v", rows[0].Scan)
 		}
 	}

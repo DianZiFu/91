@@ -10,7 +10,7 @@ import { SkipDirsIcon } from "../src/admin/icons/SkipDirsIcon";
 
 const result: ScanResult = {
   driveId: "drive", state: "partial", startedAt: "2026-09-05T10:00:00Z", finishedAt: "2026-09-05T10:01:00Z",
-  scannedCount: 7, addedCount: 2, updatedCount: 1, duplicateCount: 3, tombstonedCount: 1, errorCount: 1,
+  scannedCount: 7, addedCount: 2, updatedCount: 1, duplicateCount: 3, tombstonedCount: 1, cleanedCount: 2, errorCount: 1,
   issues: [{ stage: "discovery", message: "子目录读取失败" }],
 };
 
@@ -23,7 +23,7 @@ test("scan details retain status and counts without internal messages", () => {
   const canceled: ScanResult = { ...result, state: "canceled", message: "context canceled", errorCount: 25 };
   const markup = renderToStaticMarkup(createElement(ScanResultDetails, { result: canceled }));
   const html = markup.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-  for (const text of ["已取消", "已扫描 7", "新增 2", "更新 1", "重复跳过 3", "黑名单跳过 1", "错误 25"]) assert.ok(html.includes(text), text);
+  for (const text of ["已取消", "已扫描 7", "新增 2", "更新 1", "跳过 4", "清理 2", "错误 25"]) assert.ok(html.includes(text), text);
   assert.match(markup, /<time dateTime="2026-09-05T10:01:00Z" title="结束时间：/);
   for (const text of ["context canceled", "子目录读取失败", "日志"]) assert.ok(!html.includes(text), text);
 });
@@ -36,6 +36,7 @@ test("scan results use one compact card with six inline label-value pairs", () =
   assert.equal((html.match(/admin-detail-card /g) ?? []).length, 1);
   assert.match(html, /role="status"/);
   assert.doesNotMatch(html, /admin-scan-result__summary|admin-drive-scan|<button/);
+  assert.doesNotMatch(html, /重复跳过|黑名单跳过/);
 });
 
 test("scan result headers use the supplied folder search icon in every state", () => {
@@ -112,18 +113,20 @@ test("scan result cards omit invalid finish times while retaining statistics", (
 
 test("scan result counts omit grouping and only highlight nonzero errors", () => {
   const html = renderToStaticMarkup(createElement(ScanResultDetails, {
-    result: { ...result, scannedCount: 12846, addedCount: 0, updatedCount: 1234567, duplicateCount: 2345, tombstonedCount: 3456, errorCount: 25000 },
+    result: { ...result, scannedCount: 12846, addedCount: 0, updatedCount: 1234567, duplicateCount: 2345, tombstonedCount: 3456, cleanedCount: 5678, errorCount: 25000 },
   }));
   assert.match(html, /<dt>已扫描<\/dt><dd>12846<\/dd>/);
   assert.match(html, /<dt>新增<\/dt><dd class="is-zero">0<\/dd>/);
   assert.match(html, /<dt>更新<\/dt><dd>1234567<\/dd>/);
-  assert.match(html, /<dt>重复跳过<\/dt><dd>2345<\/dd>/);
-  assert.match(html, /<dt>黑名单跳过<\/dt><dd>3456<\/dd>/);
+  assert.match(html, /<dt>跳过<\/dt><dd>5801<\/dd>/);
+  assert.match(html, /<dt>清理<\/dt><dd>5678<\/dd>/);
   assert.match(html, /<dt>错误<\/dt><dd class="is-error">25000<\/dd>/);
   assert.doesNotMatch(html, /\d,\d/);
   const zero = renderToStaticMarkup(createElement(ScanResultDetails, {
-    result: { ...result, errorCount: 0 },
+    result: { ...result, duplicateCount: 0, tombstonedCount: 0, cleanedCount: 0, errorCount: 0 },
   }));
+  assert.match(zero, /<dt>跳过<\/dt><dd class="is-zero">0<\/dd>/);
+  assert.match(zero, /<dt>清理<\/dt><dd class="is-zero">0<\/dd>/);
   assert.match(zero, /<dt>错误<\/dt><dd class="is-zero">0<\/dd>/);
 });
 

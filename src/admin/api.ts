@@ -1400,6 +1400,7 @@ export type ScanResult = {
   updatedCount: number;
   duplicateCount: number;
   tombstonedCount: number;
+  cleanedCount: number;
   errorCount: number;
   message?: string;
   issues?: ScanIssue[];

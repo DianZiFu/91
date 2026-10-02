@@ -24,7 +24,7 @@ export const scanResultMetrics = [
   { key: "scannedCount", label: "已扫描" },
   { key: "addedCount", label: "新增" },
   { key: "updatedCount", label: "更新" },
-  { key: "duplicateCount", label: "重复跳过" },
-  { key: "tombstonedCount", label: "黑名单跳过" },
+  { key: "skippedCount", label: "跳过" },
+  { key: "cleanedCount", label: "清理" },
   { key: "errorCount", label: "错误" },
 ] as const;

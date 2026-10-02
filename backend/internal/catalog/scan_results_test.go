@@ -22,7 +22,7 @@ func TestScanResultsSurviveReopenAndBelongToTheirDrive(t *testing.T) {
 	}
 	now := time.Now()
 	for _, state := range []scanjob.State{scanjob.Failed, scanjob.Succeeded} {
-		if err := cat.SaveScanResult(ctx, scanjob.Result{DriveID: "drive", State: state, StartedAt: now, FinishedAt: now, AddedCount: 3}); err != nil {
+		if err := cat.SaveScanResult(ctx, scanjob.Result{DriveID: "drive", State: state, StartedAt: now, FinishedAt: now, AddedCount: 3, CleanedCount: 2}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,7 +37,7 @@ func TestScanResultsSurviveReopenAndBelongToTheirDrive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results["drive"].State != scanjob.Succeeded || results["drive"].AddedCount != 3 {
+	if len(results) != 1 || results["drive"].State != scanjob.Succeeded || results["drive"].AddedCount != 3 || results["drive"].CleanedCount != 2 {
 		t.Fatalf("results = %+v", results)
 	}
 	if err := cat.DeleteDrive(ctx, "drive"); err != nil {

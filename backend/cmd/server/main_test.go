@@ -29,6 +29,7 @@ import (
 	"github.com/video-site/backend/internal/mediaasset"
 	"github.com/video-site/backend/internal/preview"
 	"github.com/video-site/backend/internal/proxy"
+	"github.com/video-site/backend/internal/scanjob"
 	"github.com/video-site/backend/internal/scanner"
 )
 
@@ -2630,7 +2631,10 @@ func TestRunScanImmediatelyRemovesMissingVideoAfterCleanScan(t *testing.T) {
 		cat: cat, registry: registry,
 	}
 
-	app.runScan(ctx, driveID)
+	result := app.runScan(ctx, driveID)
+	if result.CleanedCount != 1 {
+		t.Fatalf("cleaned count = %d, want 1", result.CleanedCount)
+	}
 	if _, err := cat.GetVideo(ctx, videoID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("stale video lookup after clean scan = %v, want sql.ErrNoRows", err)
 	}
@@ -2639,6 +2643,13 @@ func TestRunScanImmediatelyRemovesMissingVideoAfterCleanScan(t *testing.T) {
 	}
 	if _, err := os.Stat(previewPath); !os.IsNotExist(err) {
 		t.Fatalf("stale preview still exists after clean scan: %v", err)
+	}
+	stored, err := cat.LatestScanResults(ctx)
+	if err != nil || stored[driveID].CleanedCount != 1 {
+		t.Fatalf("stored result = %+v, err = %v", stored, err)
+	}
+	if result := app.runScan(ctx, driveID); result.CleanedCount != 0 {
+		t.Fatalf("rescan cleaned count = %d, want 0", result.CleanedCount)
 	}
 }
 
@@ -2987,6 +2998,10 @@ func TestRunScanCompletesCombinedSkipPolicyAfterReconciliation(t *testing.T) {
 			ID: "legacy-skip-video", DriveID: driveID, FileID: "legacy-file", FileName: "legacy.mp4",
 			ParentID: "legacy-deep", Title: "Legacy", Size: 2,
 		},
+		{
+			ID: "missing-video", DriveID: driveID, FileID: "missing-file", FileName: "missing.mp4",
+			ParentID: "root", AncestorDirIDs: []string{"root"}, Title: "Missing", Size: 3,
+		},
 	} {
 		video.PublishedAt = now
 		video.CreatedAt = now
@@ -3007,12 +3022,15 @@ func TestRunScanCompletesCombinedSkipPolicyAfterReconciliation(t *testing.T) {
 		cfg: &config.Config{Scanner: config.Scanner{VideoExtensions: []string{".mp4"}}},
 		cat: cat, registry: registry,
 	}
-	app.runScan(ctx, driveID)
+	result := app.runScan(ctx, driveID)
+	if result.State != scanjob.Succeeded || result.CleanedCount != 3 {
+		t.Fatalf("combined cleanup result = %+v, want 3 cleaned videos", result)
+	}
 
 	if got, want := strings.Join(drv.listOrder, ","), "root,skip-dir,legacy-deep"; got != want {
 		t.Fatalf("directory list order = %q, want %q", got, want)
 	}
-	for _, videoID := range []string{"exact-skip-video", "legacy-skip-video"} {
+	for _, videoID := range []string{"exact-skip-video", "legacy-skip-video", "missing-video"} {
 		if _, err := cat.GetVideo(ctx, videoID); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("skip-policy video %s lookup = %v, want sql.ErrNoRows", videoID, err)
 		}
@@ -3089,14 +3107,20 @@ func TestRunScanCleansHealthyAreasWhileFailedSubtreeIsProtected(t *testing.T) {
 		cat: cat, registry: registry,
 	}
 
-	app.runScan(ctx, driveID)
+	first := app.runScan(ctx, driveID)
+	if first.CleanedCount != 0 {
+		t.Fatalf("first scan cleaned count = %d, want 0 before confirmation", first.CleanedCount)
+	}
 	for _, videoID := range []string{"stale-healthy", "stale-removed-tree", "protected-failed-tree"} {
 		if _, err := cat.GetVideo(ctx, videoID); err != nil {
 			t.Fatalf("video %s removed before second confirmation: %v", videoID, err)
 		}
 	}
 
-	app.runScan(ctx, driveID)
+	second := app.runScan(ctx, driveID)
+	if second.CleanedCount != 2 {
+		t.Fatalf("confirmed scan cleaned count = %d, want 2", second.CleanedCount)
+	}
 	for _, videoID := range []string{"stale-healthy", "stale-removed-tree"} {
 		if _, err := cat.GetVideo(ctx, videoID); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("eligible stale video %s lookup = %v, want sql.ErrNoRows", videoID, err)
