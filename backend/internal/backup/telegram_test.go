@@ -50,6 +50,10 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 			if _, err = db.Exec(`UPDATE remote_upload_jobs SET state='completed',completed_video_id='local-upload-video'; UPDATE telegram_files SET video_id='local-upload-video'`); err != nil {
 				t.Fatal(err)
 			}
+			if _, err = db.Exec(`INSERT INTO telegram_upload_cleanups(video_id,source_drive_id,source_file_id,size_bytes,mod_time_ns,file_identity,created_at,updated_at)
+ VALUES('migrated-video','telegram-local','old.media',5,123,'PRIVATE_LOCAL_FILE_IDENTITY',1,1)`); err != nil {
+				t.Fatal(err)
+			}
 			snapshot := filepath.Join(t.TempDir(), "snapshot.db")
 			if err = c.BackupTo(ctx, snapshot); err != nil {
 				t.Fatal(err)
@@ -66,7 +70,7 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 				t.Fatal(err)
 			}
 			defer archive.Close()
-			for _, table := range []string{"telegram_settings", "telegram_connections", "telegram_receipts", "telegram_media_group_updates"} {
+			for _, table := range []string{"telegram_settings", "telegram_connections", "telegram_receipts", "telegram_media_group_updates", "telegram_upload_cleanups"} {
 				var count int
 				if err = archive.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
 					t.Fatalf("%s not empty: %d %v", table, count, err)
@@ -92,7 +96,7 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 				}
 			}
 			raw, err := os.ReadFile(snapshot)
-			if err != nil || bytes.Contains(raw, []byte("PRIVATE_TOKEN")) || bytes.Contains(raw, []byte("PRIVATE_API_HASH")) || bytes.Contains(raw, []byte("PRIVATE_ALBUM_CAPTION")) {
+			if err != nil || bytes.Contains(raw, []byte("PRIVATE_TOKEN")) || bytes.Contains(raw, []byte("PRIVATE_API_HASH")) || bytes.Contains(raw, []byte("PRIVATE_ALBUM_CAPTION")) || bytes.Contains(raw, []byte("PRIVATE_LOCAL_FILE_IDENTITY")) {
 				t.Fatal("credentials survived snapshot sanitization")
 			}
 			private, err := c.GetTelegramSettings(ctx)
@@ -105,6 +109,9 @@ func TestTelegramBackupSanitizesRuntimeStateAndPreservesFileIdentity(t *testing.
 			}
 			if err = db.QueryRow(`SELECT COUNT(*) FROM telegram_media_group_updates`).Scan(&live); err != nil || live != 1 {
 				t.Fatal("archive sanitization changed live media group", err)
+			}
+			if err = db.QueryRow(`SELECT COUNT(*) FROM telegram_upload_cleanups`).Scan(&live); err != nil || live != 1 {
+				t.Fatal("archive sanitization changed live cleanup tasks", err)
 			}
 		})
 	}

@@ -259,7 +259,7 @@ func validateTelegramArchiveScope(ctx context.Context, db *sql.DB, selection Bac
 		}
 	}
 
-	for _, table := range []string{"telegram_settings", "telegram_connections", "telegram_receipts", "telegram_media_group_updates", "telegram_files", "telegram_local_files"} {
+	for _, table := range []string{"telegram_settings", "telegram_connections", "telegram_receipts", "telegram_media_group_updates", "telegram_files", "telegram_local_files", "telegram_upload_cleanups"} {
 		var present int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&present); err != nil {
 			return err

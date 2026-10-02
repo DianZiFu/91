@@ -15,21 +15,31 @@ import (
 )
 
 type fakeCloud struct {
-	files       map[string]drives.Entry
-	uploads     int
-	failUpload  bool
-	failStat    bool
-	failStream  bool
-	wrongSize   bool
-	afterUpload func()
+	files        map[string]drives.Entry
+	uploads      int
+	failUpload   bool
+	failStat     bool
+	failStream   bool
+	wrongSize    bool
+	directoryErr error
+	listErr      error
+	uploadErr    error
+	statErr      error
+	streamErr    error
+	afterUpload  func()
 }
 
-func (d *fakeCloud) ID() string                                        { return "cloud" }
-func (d *fakeCloud) Kind() string                                      { return "webdav" }
-func (d *fakeCloud) RootID() string                                    { return "root" }
-func (d *fakeCloud) Init(context.Context) error                        { return nil }
-func (d *fakeCloud) EnsureDir(context.Context, string) (string, error) { return "folder", nil }
+func (d *fakeCloud) ID() string                 { return "cloud" }
+func (d *fakeCloud) Kind() string               { return "webdav" }
+func (d *fakeCloud) RootID() string             { return "root" }
+func (d *fakeCloud) Init(context.Context) error { return nil }
+func (d *fakeCloud) EnsureDir(context.Context, string) (string, error) {
+	return "folder", d.directoryErr
+}
 func (d *fakeCloud) List(context.Context, string) ([]drives.Entry, error) {
+	if d.listErr != nil {
+		return nil, d.listErr
+	}
 	var entries []drives.Entry
 	for _, e := range d.files {
 		entries = append(entries, e)
@@ -37,6 +47,9 @@ func (d *fakeCloud) List(context.Context, string) ([]drives.Entry, error) {
 	return entries, nil
 }
 func (d *fakeCloud) Stat(_ context.Context, id string) (*drives.Entry, error) {
+	if d.statErr != nil {
+		return nil, d.statErr
+	}
 	if d.failStat {
 		return nil, errors.New("not visible yet")
 	}
@@ -50,6 +63,9 @@ func (d *fakeCloud) Stat(_ context.Context, id string) (*drives.Entry, error) {
 	return &e, nil
 }
 func (d *fakeCloud) StreamURL(context.Context, string) (*drives.StreamLink, error) {
+	if d.streamErr != nil {
+		return nil, d.streamErr
+	}
 	if d.failStream {
 		return nil, errors.New("no playback")
 	}
@@ -57,6 +73,9 @@ func (d *fakeCloud) StreamURL(context.Context, string) (*drives.StreamLink, erro
 }
 func (d *fakeCloud) Upload(_ context.Context, parent, name string, r io.Reader, size int64) (string, error) {
 	d.uploads++
+	if d.uploadErr != nil {
+		return "", d.uploadErr
+	}
 	if d.failUpload {
 		return "", errors.New("provider credential must not escape")
 	}
@@ -242,8 +261,14 @@ func TestDestinationNamesSeparateSameTitleImports(t *testing.T) {
 	a := &catalog.Video{ID: "a", FileID: strings.Repeat("视", 75) + ".mp4"}
 	b := *a
 	b.ID = "b"
-	if destinationName(a) == destinationName(&b) || len(destinationName(a)) > 240 || !strings.HasSuffix(destinationName(a), ".mp4") {
+	name := destinationName(a)
+	if name == destinationName(&b) || len(name) > 240 || !strings.HasSuffix(name, ".mp4") {
 		t.Fatal("unstable or oversized destination names")
+	}
+	stem := strings.TrimSuffix(name, ".mp4")
+	suffix := stem[strings.LastIndexByte(stem, '-')+1:]
+	if len(suffix) != 16 || strings.Trim(suffix, "0123456789abcdef") != "" {
+		t.Fatalf("destination hash suffix = %q, want 16 lowercase hexadecimal characters", suffix)
 	}
 }
 

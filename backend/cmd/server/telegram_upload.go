@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
@@ -15,7 +16,7 @@ func (a *App) runTelegramUploadMigration(ctx context.Context) error {
 	}
 	cfg := a.configManager.TelegramSettings()
 	if cfg.UploadDriveID == "" {
-		return nil
+		return a.cleanupTelegramUploadSources(ctx)
 	}
 	var migrated []*catalog.Video
 	err := func() error {
@@ -27,12 +28,15 @@ func (a *App) runTelegramUploadMigration(ctx context.Context) error {
 			return err
 		}
 		row, err := a.activeDriveConfig(taskCtx, cfg.UploadDriveID)
-		if err != nil || row == nil || !drives.CapabilitiesForKind(row.Kind).Upload {
-			return errors.New("TG 转存目标不存在或不支持上传，请检查 Telegram 设置")
+		if err != nil {
+			return errors.Join(fmt.Errorf("读取 TG 转存目标失败: %w", err), a.cleanupTelegramUploadSources(taskCtx))
+		}
+		if row == nil || !drives.CapabilitiesForKind(row.Kind).Upload {
+			return errors.Join(errors.New("TG 转存目标不存在或不支持上传，请检查 Telegram 设置"), a.cleanupTelegramUploadSources(taskCtx))
 		}
 		target, ok := a.registry.Get(cfg.UploadDriveID)
 		if !ok {
-			return errors.New("TG 转存目标网盘尚未连接")
+			return errors.Join(errors.New("TG 转存目标网盘尚未连接"), a.cleanupTelegramUploadSources(taskCtx))
 		}
 		return telegramupload.Run(taskCtx, telegramupload.Config{
 			Catalog: a.cat, Target: target, LocalDirectory: a.localUploadDir(),
@@ -48,4 +52,14 @@ func (a *App) runTelegramUploadMigration(ctx context.Context) error {
 		a.enqueueUploadedVideo(ctx, v)
 	}
 	return err
+}
+
+func (a *App) cleanupTelegramUploadSources(ctx context.Context) error {
+	if a == nil || a.cat == nil {
+		return nil
+	}
+	return telegramupload.Cleanup(ctx, telegramupload.Config{
+		Catalog: a.cat, LocalDirectory: a.localUploadDir(),
+		TelegramDirectory: a.configManager.TelegramSettings().LocalFilesRoot,
+	})
 }

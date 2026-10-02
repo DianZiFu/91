@@ -27,6 +27,16 @@ func (c *Catalog) migrateImports(ctx context.Context) error {
  CREATE TABLE IF NOT EXISTS telegram_local_files (
   file_id TEXT PRIMARY KEY, job_id TEXT NOT NULL UNIQUE
  );
+ CREATE TABLE IF NOT EXISTS telegram_upload_cleanups (
+  video_id TEXT PRIMARY KEY,
+  source_drive_id TEXT NOT NULL, source_file_id TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL, mod_time_ns INTEGER NOT NULL,
+  file_identity TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+ );
+ CREATE INDEX IF NOT EXISTS idx_telegram_upload_cleanup_source
+  ON telegram_upload_cleanups(source_drive_id,source_file_id);
  CREATE TABLE IF NOT EXISTS telegram_connections (
   bot_id INTEGER PRIMARY KEY, next_offset INTEGER NOT NULL DEFAULT 0,
   needs_reconnect INTEGER NOT NULL DEFAULT 0

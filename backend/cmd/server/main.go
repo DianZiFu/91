@@ -219,6 +219,9 @@ func main() {
 	if err := app.attachLocalUpload(ctx); err != nil {
 		log.Printf("[local-upload] attach failed: %v", err)
 	}
+	if err := app.cleanupTelegramUploadSources(ctx); err != nil {
+		log.Printf("[telegram-upload] startup source cleanup: %v", err)
+	}
 	go app.runFingerprintReconciler(ctx)
 
 	telegramService := telegram.NewIntegration(cat, configManager, app.localUploadDir(), cfg.RemoteUpload.DiskReserveBytes)

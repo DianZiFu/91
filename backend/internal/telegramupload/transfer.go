@@ -15,10 +15,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/video-site/backend/internal/applog"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/drives"
-	"github.com/video-site/backend/internal/drives/localupload"
-	"github.com/video-site/backend/internal/drives/telegramstorage"
 	"github.com/video-site/backend/internal/persistence"
 	"github.com/video-site/backend/internal/scopedproxy"
 )
@@ -40,29 +39,43 @@ type Config struct {
 
 // Run makes one cancellable sweep. Failed videos remain local and are retried
 // by the next scheduled run. Only durable Telegram imports are selected.
-func Run(ctx context.Context, cfg Config) error {
+func Run(ctx context.Context, cfg Config) (runErr error) {
+	defer func() {
+		if runErr != nil {
+			driveID := ""
+			if cfg.Target != nil {
+				driveID = cfg.Target.ID()
+			}
+			logFailure(ctx, "", driveID, runErr)
+		}
+	}()
 	if cfg.Catalog == nil || cfg.Target == nil {
-		return errors.New("TG 转存服务未配置")
+		return failure("configuration", "TG 转存服务未配置", nil)
+	}
+	cleanupErr := Cleanup(ctx, cfg)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	uploader, ok := cfg.Target.(drives.Uploader)
 	if !ok {
-		return errors.New("目标网盘不支持上传")
+		return errors.Join(cleanupErr, failure("configuration", "目标网盘不支持上传", drives.ErrNotSupported))
 	}
 	uploadCtx, err := scopedproxy.WithURL(ctx, cfg.UploadProxy)
 	if err != nil {
-		return errors.New("TG 转存代理地址无效，请检查 telegram.upload_proxy 配置")
+		return errors.Join(cleanupErr, failure("proxy", "TG 转存代理地址无效，请检查 telegram.upload_proxy 配置", err))
 	}
 	parent := ""
 	var existing map[string][]drives.Entry
 	after := ""
 	failed, completed := 0, 0
+	var failures []error
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		videos, err := cfg.Catalog.ListLocalTelegramVideos(ctx, after, 100)
 		if err != nil {
-			return errors.New("无法读取待转存的 TG 视频")
+			return errors.Join(cleanupErr, failure("listing", "无法读取待转存的 TG 视频", err))
 		}
 		if len(videos) == 0 {
 			break
@@ -70,11 +83,11 @@ func Run(ctx context.Context, cfg Config) error {
 		if parent == "" {
 			parent, err = uploader.EnsureDir(uploadCtx, cfg.TargetDirectory)
 			if err != nil || strings.TrimSpace(parent) == "" {
-				return errors.New("无法创建或读取 TG 转存目标目录")
+				return errors.Join(cleanupErr, failure("directory", "无法创建或读取 TG 转存目标目录", err))
 			}
 			entries, err := cfg.Target.List(uploadCtx, parent)
 			if err != nil {
-				return errors.New("无法检查目标目录中已有的 TG 文件")
+				return errors.Join(cleanupErr, failure("listing", "无法检查目标目录中已有的 TG 文件", err))
 			}
 			existing = make(map[string][]drives.Entry)
 			for _, e := range entries {
@@ -91,45 +104,55 @@ func Run(ctx context.Context, cfg Config) error {
 					return ctx.Err()
 				}
 				failed++
-				log.Printf("[telegram-upload] video=%s failed: %v", v.ID, err)
+				failures = append(failures, err)
+				logFailure(ctx, v.ID, cfg.Target.ID(), err)
 				// Provider rate limits should stop this sweep rather than send
 				// the rest of the library into the same failing service.
 				if _, limited := drives.RateLimitRetryAfter(err); limited {
-					return errors.New("TG 转存受到网盘限流，本轮已停止，下次定时任务重试")
+					return errors.Join(cleanupErr, failure("rate_limit", "TG 转存受到网盘限流，本轮已停止，下次定时任务重试", err))
 				}
 				continue
 			}
 			completed++
-			if cfg.OnMigrated != nil {
-				if saved, err := cfg.Catalog.GetVideo(ctx, v.ID); err == nil {
-					cfg.OnMigrated(saved)
-				}
-			}
 			log.Printf("[telegram-upload] video=%s stored on drive=%s", v.ID, cfg.Target.ID())
 		}
 	}
 	log.Printf("[telegram-upload] finished: completed=%d failed=%d", completed, failed)
 	if failed > 0 {
-		return fmt.Errorf("%d 个 TG 视频转存失败，请检查网盘连接和本地文件；下次定时任务会重试", failed)
+		return errors.Join(cleanupErr, failure("sweep", fmt.Sprintf("%d 个 TG 视频转存失败，请检查网盘连接和本地文件；下次定时任务会重试", failed), errors.Join(failures...)))
 	}
-	return nil
+	return cleanupErr
 }
 
 func transferOne(ctx context.Context, cfg Config, uploader drives.Uploader, parent string, existing map[string][]drives.Entry, v *catalog.Video) error {
 	if v.FileID == "" || filepath.Base(v.FileID) != v.FileID || strings.ContainsAny(v.FileID, "\\\x00") {
-		return errors.New("本地视频路径无效")
+		return failure("source", "本地视频路径无效", nil)
 	}
-	var storage localSource = localupload.New(cfg.LocalDirectory)
-	if v.DriveID == telegramstorage.DriveID {
-		storage = telegramstorage.New(cfg.Catalog, func() string { return cfg.TelegramDirectory })
-	}
+	storage := sourceStorage(cfg, v.DriveID)
 	localPath, err := storage.LocalPath(ctx, v.FileID)
 	if err != nil {
-		return errors.New("无法读取本地视频位置")
+		return failure("source", "无法读取本地视频位置", err)
 	}
 	info, err := os.Lstat(localPath)
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() != v.Size {
-		return errors.New("本地视频不存在或大小不一致")
+		return failure("source", "本地视频不存在或大小不一致", err)
+	}
+	f, err := os.Open(localPath)
+	if err != nil {
+		return failure("source", "无法读取本地视频", err)
+	}
+	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(info, opened) || opened.Size() != info.Size() || !opened.ModTime().Equal(info.ModTime()) {
+		return failure("source", "本地视频在读取期间发生变化", err)
+	}
+	identity, err := sourceFileIdentity(f)
+	if err != nil {
+		return failure("source", "无法记录本地视频身份", err)
+	}
+	cleanup := catalog.TelegramUploadCleanup{
+		VideoID: v.ID, SourceDriveID: v.DriveID, SourceFileID: v.FileID,
+		Size: info.Size(), ModTimeNS: info.ModTime().UnixNano(), FileIdentity: identity,
 	}
 	// Local filenames can be reused after migration. Include the immutable
 	// video ID so distinct same-title imports never bind to each other's file.
@@ -137,73 +160,62 @@ func transferOne(ctx context.Context, cfg Config, uploader drives.Uploader, pare
 	fileID := ""
 	if matches := existing[name]; len(matches) > 0 {
 		if len(matches) != 1 || matches[0].IsDir || matches[0].Size != info.Size() {
-			return errors.New("目标目录存在冲突的同名文件，请先处理后重试")
+			return failure("reconcile", "目标目录存在冲突的同名文件，请先处理后重试", nil)
 		}
 		fileID = matches[0].ID
 		if fileID == "" {
-			return errors.New("目标文件标识无效")
+			return failure("reconcile", "目标文件标识无效", nil)
 		}
 	} else {
-		f, err := os.Open(localPath)
-		if err != nil {
-			return errors.New("无法读取本地视频")
-		}
-		opened, statErr := f.Stat()
-		if statErr != nil || !os.SameFile(info, opened) || opened.Size() != info.Size() {
-			f.Close()
-			return errors.New("本地视频在读取期间发生变化")
-		}
 		// Retain ownership of f: HTTP clients close request bodies that implement
 		// io.Closer. A section reader preserves seek/parallel reads for drivers
 		// without allowing them to close the local file before we do.
 		fileID, err = uploader.Upload(ctx, parent, name, io.NewSectionReader(f, 0, info.Size()), info.Size())
-		closeErr := f.Close()
 		if err != nil {
-			if delay, limited := drives.RateLimitRetryAfter(err); limited {
-				return &drives.RateLimitError{RetryAfter: delay, Err: errors.New("网盘上传受到限流")}
-			}
-			return errors.New("网盘上传失败")
+			return failure("upload", "网盘上传失败", err)
 		}
-		if closeErr != nil || strings.TrimSpace(fileID) == "" {
-			return errors.New("网盘上传未返回有效的文件结果")
+		if strings.TrimSpace(fileID) == "" {
+			return failure("upload", "网盘上传未返回有效的文件结果", nil)
 		}
 		// Remember the remote write even if its verification/catalog commit
 		// fails. A subsequent sweep rebuilds this index from the cloud drive.
 		existing[name] = []drives.Entry{{ID: fileID, Name: name, Size: info.Size()}}
 	}
+	if err := f.Close(); err != nil {
+		return failure("source", "无法关闭本地视频文件", err)
+	}
 	remote, err := cfg.Target.Stat(ctx, fileID)
 	if err != nil || remote == nil || remote.IsDir || remote.Size != info.Size() {
-		return errors.New("无法确认网盘文件完整，本地来源保持不变")
+		return failure("verify", "无法确认网盘文件完整，本地来源保持不变", err)
 	}
 	link, err := cfg.Target.StreamURL(ctx, fileID)
 	if err != nil || link == nil || strings.TrimSpace(link.URL) == "" {
-		return errors.New("无法取得网盘播放地址，本地来源保持不变")
+		return failure("playback", "无法取得网盘播放地址，本地来源保持不变", err)
 	}
 	if err := persistence.RLockContext(ctx); err != nil {
 		return err
 	}
-	defer persistence.RUnlock()
 	if err := ctx.Err(); err != nil {
+		persistence.RUnlock()
 		return err
 	}
-	if err := cfg.Catalog.MigrateVideoToDrive(ctx, v.ID, catalog.VideoDriveMigration{
+	err = cfg.Catalog.MigrateTelegramVideoToDrive(ctx, v.ID, catalog.VideoDriveMigration{
 		SourceDriveID: v.DriveID, SourceFileID: v.FileID,
 		DriveID: cfg.Target.ID(), FileID: fileID, ContentHash: remote.Hash,
 		ParentID: parent, DirName: path.Base(cfg.TargetDirectory), FileName: name,
-	}); err != nil {
-		return errors.New("视频记录已变化或保存失败，本地文件已保留")
+	}, cleanup)
+	persistence.RUnlock()
+	if err != nil {
+		return failure("migration", "视频记录已变化或保存失败，本地文件已保留", err)
 	}
-	current, err := os.Lstat(localPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+	if cfg.OnMigrated != nil {
+		if saved, err := cfg.Catalog.GetVideo(ctx, v.ID); err == nil {
+			cfg.OnMigrated(saved)
+		} else {
+			applog.Warn(ctx, "TG 视频已转存，但读取生成任务所需的视频记录失败", err, applog.Fields{Component: "telegram-upload", VideoID: v.ID, Stage: "generation"})
+		}
 	}
-	if err != nil || !os.SameFile(info, current) || info.Size() != current.Size() || !info.ModTime().Equal(current.ModTime()) {
-		return errors.New("视频已转存，但本地文件发生变化，已保留供检查")
-	}
-	if err := storage.Remove(ctx, v.FileID); err != nil {
-		return errors.New("视频已转存，但无法删除本地副本")
-	}
-	return nil
+	return cleanupSource(ctx, cfg, cleanup)
 }
 
 func destinationName(v *catalog.Video) string {
@@ -214,7 +226,7 @@ func destinationName(v *catalog.Video) string {
 	ext := filepath.Ext(name)
 	title := strings.TrimSuffix(name, ext)
 	id := sha256.Sum256([]byte(v.ID))
-	suffix := fmt.Sprintf("-%x", id[:12])
+	suffix := fmt.Sprintf("-%x", id[:8])
 	for len(title)+len(suffix)+len(ext) > 240 && len(title) > 0 {
 		_, size := utf8.DecodeLastRuneInString(title)
 		title = title[:len(title)-size]

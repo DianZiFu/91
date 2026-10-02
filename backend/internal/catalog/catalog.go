@@ -492,6 +492,10 @@ type VideoDriveMigration struct {
 // scanner 后续看到目标目录下相同 hash / file_name 的文件时，会通过
 // findDuplicate 命中本行，不会再插入重复行。
 func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, target VideoDriveMigration) error {
+	return migrateVideoToDrive(ctx, c.db, videoID, target)
+}
+
+func migrateVideoToDrive(ctx context.Context, exec videoRowExecer, videoID string, target VideoDriveMigration) error {
 	if strings.TrimSpace(videoID) == "" || strings.TrimSpace(target.DriveID) == "" || strings.TrimSpace(target.FileID) == "" {
 		return fmt.Errorf("catalog: migrate video: empty id/drive/file")
 	}
@@ -501,7 +505,7 @@ func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, targe
 		dirNames = []string{}
 	}
 	dirNamesJSON, _ := json.Marshal(dirNames)
-	res, err := c.db.ExecContext(ctx,
+	res, err := exec.ExecContext(ctx,
 		`UPDATE videos
 		   SET drive_id     = ?,
 		       file_id      = ?,

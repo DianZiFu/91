@@ -62,6 +62,7 @@ func normalizeTelegramSnapshot(ctx context.Context, tx *sql.Tx, state *snapshotS
 	// Tombstones carry no exported video bytes, as with ordinary upload storage.
 	// Preserve their identity without retaining a reference to the source host.
 	for _, statement := range []string{
+		`DELETE FROM telegram_upload_cleanups`,
 		`UPDATE deleted_videos SET drive_id='local-upload',file_id='telegram-'||file_id,restore_payload=CASE WHEN json_valid(restore_payload) THEN json_set(restore_payload,'$.video.driveId','local-upload','$.video.fileId','telegram-'||file_id) ELSE restore_payload END WHERE drive_id='telegram-local'`,
 		`DELETE FROM telegram_local_files`,
 	} {

@@ -37,6 +37,7 @@ func (c *Catalog) AbandonedTelegramLocalFiles(ctx context.Context) ([]TelegramLo
 	rows, err := c.db.QueryContext(ctx, `SELECT f.file_id,f.job_id FROM telegram_local_files f
  LEFT JOIN remote_upload_jobs j ON j.id=f.job_id
  WHERE (j.id IS NULL OR j.state IN ('failed','canceled'))
+ AND NOT EXISTS (SELECT 1 FROM telegram_upload_cleanups u WHERE u.source_drive_id='telegram-local' AND u.source_file_id=f.file_id)
  AND NOT EXISTS (SELECT 1 FROM videos v WHERE v.drive_id='telegram-local' AND v.file_id=f.file_id)
  AND NOT EXISTS (SELECT 1 FROM deleted_videos v WHERE v.drive_id='telegram-local' AND v.file_id=f.file_id)`)
 	if err != nil {
