@@ -300,12 +300,13 @@ func (g *Generator) GenerateThumbnail(ctx context.Context, link *drives.StreamLi
 	defer os.Remove(tempPath)
 
 	var lastErr error
+	var colorRepair sourceColorRepair
 	offsets := thumbnailOffsets(duration)
 	for i, offset := range offsets {
 		if i > 0 {
 			_ = os.Remove(tempPath)
 		}
-		if err := g.generateThumbnailAtOffset(ctx, link, tempPath, offset); err != nil {
+		if err := g.generateThumbnailAtOffset(ctx, link, tempPath, offset, &colorRepair); err != nil {
 			lastErr = err
 			if !thumbnailOffsetFallbackAllowed(err) {
 				return "", err
@@ -323,7 +324,7 @@ func (g *Generator) GenerateThumbnail(ctx context.Context, link *drives.StreamLi
 	return "", errors.New("thumbnail generation did not run")
 }
 
-func (g *Generator) generateThumbnailAtOffset(ctx context.Context, link *drives.StreamLink, dst string, offset float64) error {
+func (g *Generator) generateThumbnailAtOffset(ctx context.Context, link *drives.StreamLink, dst string, offset float64, colorRepair *sourceColorRepair) error {
 	ctx2, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	ffmpegLink, cleanup, err := prepareFFmpegLink(ctx2, link)
@@ -340,18 +341,14 @@ func (g *Generator) generateThumbnailAtOffset(ctx context.Context, link *drives.
 		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 		"-ss", fmt.Sprintf("%.2f", offset),
 	}
-	args = append(args, ffmpegHTTPInputOptions(ffmpegLink)...)
-	args = append(args,
-		"-i", ffmpegLink.URL,
+	outputArgs := []string{
 		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 		"-frames:v", "1",
 		"-vf", thumbnailVideoFilter(g.cfg.Width),
 		"-q:v", "3",
 		"-y", dst,
-	)
-
-	cmd := exec.CommandContext(ctx2, g.cfg.FFmpegPath, args...)
-	out, err := cmd.CombinedOutput()
+	}
+	out, err := g.runMediaCommand(ctx2, link, ffmpegLink, args, outputArgs, colorRepair)
 	if err != nil {
 		os.Remove(dst)
 		return ffmpegCommandError("ffmpeg thumb", err, out)
@@ -396,6 +393,9 @@ func thumbnailOffsetFallbackAllowed(err error) bool {
 	if err == nil {
 		return false
 	}
+	if _, ok := drives.RateLimitRetryAfter(err); ok {
+		return false
+	}
 	text := strings.ToLower(err.Error())
 	if transientRemoteMediaReadText(text) || strings.Contains(text, "moov atom not found") {
 		return true
@@ -403,7 +403,8 @@ func thumbnailOffsetFallbackAllowed(err error) bool {
 	if deterministicMediaInputError(text) {
 		return false
 	}
-	return strings.Contains(text, "produced empty file") ||
+	return invalidColorMetadataText(text) ||
+		strings.Contains(text, "produced empty file") ||
 		strings.Contains(text, "context deadline exceeded")
 }
 
@@ -590,6 +591,7 @@ func (g *Generator) generateSerialWithRefresh(
 	requiredSegments := requiredTeaserSegments(duration, targetSegments, false)
 	segmentResults := make([]teaserSegmentResult, 0, targetSegments)
 	currentLink := initialLink
+	var colorRepair sourceColorRepair
 	nextCandidate := 0
 	var lastErr error
 	for nextCandidate < len(candidates) && len(segmentResults) < targetSegments {
@@ -607,6 +609,7 @@ func (g *Generator) generateSerialWithRefresh(
 			eachSec,
 			fadeSegments,
 			currentLink,
+			&colorRepair,
 		)
 		if refreshAfterFailure != nil && directMediaLinkRefreshAllowed(result.err) {
 			refreshed, refreshErr := refreshAfterFailure(ctx2)
@@ -623,6 +626,7 @@ func (g *Generator) generateSerialWithRefresh(
 					eachSec,
 					fadeSegments,
 					currentLink,
+					&colorRepair,
 				)
 			case !errors.Is(refreshErr, drives.ErrGenerationStreamUnavailable):
 				return "", refreshErr
@@ -743,7 +747,7 @@ func requiredTeaserSegments(duration float64, targetSegments int, degraded bool)
 	return targetSegments
 }
 
-func (g *Generator) generateSingleSegment(ctx context.Context, index int, start, eachSec float64, fade bool, link *drives.StreamLink) (string, error) {
+func (g *Generator) generateSingleSegment(ctx context.Context, index int, start, eachSec float64, fade bool, link *drives.StreamLink, colorRepair *sourceColorRepair) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, teaserSegmentTimeout)
 	defer cancel()
 
@@ -769,11 +773,11 @@ func (g *Generator) generateSingleSegment(ctx context.Context, index int, start,
 		"-filter_complex_threads", strconv.Itoa(g.cfg.FFmpegThreads),
 		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 	}
-	args = append(args, ffmpegHTTPInputOptions(ffmpegLink)...)
 	args = append(args,
 		"-ss", fmt.Sprintf("%.2f", start),
 		"-t", fmt.Sprintf("%.2f", eachSec),
-		"-i", ffmpegLink.URL,
+	)
+	outputArgs := []string{
 		"-threads", strconv.Itoa(g.cfg.FFmpegThreads),
 		"-an",
 		"-vf", filter,
@@ -782,8 +786,8 @@ func (g *Generator) generateSingleSegment(ctx context.Context, index int, start,
 		"-crf", "28",
 		"-movflags", "+faststart",
 		"-y", segPath,
-	)
-	out, err := exec.CommandContext(ctx, g.cfg.FFmpegPath, args...).CombinedOutput()
+	}
+	out, err := g.runMediaCommand(ctx, link, ffmpegLink, args, outputArgs, colorRepair)
 	if err != nil {
 		_ = os.Remove(segPath)
 		return "", ffmpegCommandError("ffmpeg segment", err, out)
@@ -829,6 +833,8 @@ func teaserSegmentFallbackAllowed(err error) bool {
 
 func deterministicMediaInputError(text string) bool {
 	text = strings.ToLower(text)
+	// Color metadata can change between coded segments. A color failure at
+	// one timestamp does not establish that the entire source is unusable.
 	return strings.Contains(text, "invalid data found when processing input") ||
 		strings.Contains(text, "could not find codec parameters") ||
 		strings.Contains(text, "unknown format")

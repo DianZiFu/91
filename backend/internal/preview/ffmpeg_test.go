@@ -908,10 +908,10 @@ func TestGenerateMediaWithLimitedFFmpegThreads(t *testing.T) {
 			t.Fatal("default thread limit is not one")
 		}
 		link := &drives.StreamLink{URL: source}
-		if err := gen.generateThumbnailAtOffset(ctx, link, filepath.Join(dir, "cover.jpg"), 0); err != nil {
+		if err := gen.generateThumbnailAtOffset(ctx, link, filepath.Join(dir, "cover.jpg"), 0, &sourceColorRepair{}); err != nil {
 			t.Fatalf("thumbnail threads=%d: %v", threads, err)
 		}
-		if _, err := gen.generateSingleSegment(ctx, 0, 0, 1, false, link); err != nil {
+		if _, err := gen.generateSingleSegment(ctx, 0, 0, 1, false, link, &sourceColorRepair{}); err != nil {
 			t.Fatalf("preview threads=%d: %v", threads, err)
 		}
 	}
