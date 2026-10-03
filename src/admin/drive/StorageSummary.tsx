@@ -25,7 +25,7 @@ export function StorageSummary({
         <div key={metric.label} className="admin-storage-summary__metric">
           <span>{metric.label}</span>
           <strong aria-hidden={loading || undefined}>
-            {loading ? "\u00a0" : metric.value}
+            {loading ? "\u00a0" : metric.value || "\u00a0"}
           </strong>
         </div>
       ))}

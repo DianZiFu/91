@@ -119,6 +119,9 @@ type Config struct {
 	// deletes cloud source files.
 	RunDedupeAssetCleanup func(ctx context.Context) error
 
+	// OnStatusChanged signals an updated maintenance snapshot.
+	OnStatusChanged func()
+
 	// Now is injected for tests; nil → time.Now.
 	Now func() time.Time
 }
@@ -312,6 +315,11 @@ func (r *Runner) TriggerScanAll() bool {
 }
 
 func (r *Runner) queueManualRun() bool {
+	defer func() {
+		if r.cfg.OnStatusChanged != nil {
+			r.cfg.OnStatusChanged()
+		}
+	}()
 	r.stateMu.Lock()
 	if r.running || r.queued {
 		r.stateMu.Unlock()
@@ -334,6 +342,11 @@ func (r *Runner) queueManualRun() bool {
 // StopCurrent cancels the currently running pipeline and drops one queued
 // manual trigger, if present. It returns true when there was something to stop.
 func (r *Runner) StopCurrent() bool {
+	defer func() {
+		if r.cfg.OnStatusChanged != nil {
+			r.cfg.OnStatusChanged()
+		}
+	}()
 	r.stateMu.Lock()
 	wasRunning := r.running
 	wasQueued := r.queued
@@ -493,6 +506,11 @@ func (r *Runner) runModeLockedForDate(ctx context.Context, mode runMode, schedul
 }
 
 func (r *Runner) markStarted(started time.Time, cancel context.CancelFunc) {
+	defer func() {
+		if r.cfg.OnStatusChanged != nil {
+			r.cfg.OnStatusChanged()
+		}
+	}()
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 	r.running = true
@@ -505,6 +523,11 @@ func (r *Runner) markStarted(started time.Time, cancel context.CancelFunc) {
 }
 
 func (r *Runner) markFinished(finished time.Time, err error) {
+	defer func() {
+		if r.cfg.OnStatusChanged != nil {
+			r.cfg.OnStatusChanged()
+		}
+	}()
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 	r.running = false

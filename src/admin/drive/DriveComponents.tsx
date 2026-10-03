@@ -126,6 +126,8 @@ export function DriveCardMetrics({ d }: { d: api.AdminDrive }) {
 
 export function DriveGenerationPanel({
   d,
+  runtimeLoading = false,
+  countsLoading = false,
   regenFailedId,
   regenFailedThumbId,
   regenFailedFingerprintId,
@@ -134,6 +136,8 @@ export function DriveGenerationPanel({
   onRegenFailedFingerprints,
 }: {
   d: api.AdminDrive;
+  runtimeLoading?: boolean;
+  countsLoading?: boolean;
   regenFailedId: string;
   regenFailedThumbId: string;
   regenFailedFingerprintId: string;
@@ -162,11 +166,14 @@ export function DriveGenerationPanel({
         <DriveGenCol
           label="扫盘"
           status={d.scanGenerationStatus}
+          loading={runtimeLoading}
           showCounts={false}
         />
         <DriveGenCol
           label="封面"
           status={d.thumbnailGenerationStatus}
+          loading={runtimeLoading}
+          countsLoading={countsLoading}
           ready={d.thumbnailReadyCount}
           pending={d.thumbnailPendingCount}
           failed={d.thumbnailFailedCount}
@@ -175,6 +182,8 @@ export function DriveGenerationPanel({
         <DriveGenCol
           label="预览视频"
           status={d.previewGenerationStatus}
+          loading={runtimeLoading}
+          countsLoading={countsLoading}
           ready={d.teaserReadyCount}
           pending={d.teaserPendingCount}
           failed={d.teaserFailedCount}
@@ -182,6 +191,8 @@ export function DriveGenerationPanel({
         <DriveGenCol
           label="视频指纹"
           status={d.fingerprintGenerationStatus}
+          loading={runtimeLoading}
+          countsLoading={countsLoading}
           ready={d.fingerprintReadyCount}
           pending={d.fingerprintPendingCount}
           failed={d.fingerprintFailedCount}
@@ -223,6 +234,8 @@ function DriveGenCol({
   failed,
   extra,
   showCounts = true,
+  loading = false,
+  countsLoading = false,
 }: {
   label: string;
   status?: api.DriveGenerationStatus;
@@ -231,12 +244,14 @@ function DriveGenCol({
   failed?: number;
   extra?: number;
   showCounts?: boolean;
+  loading?: boolean;
+  countsLoading?: boolean;
 }) {
   const state = status?.state || "idle";
   const detail = generationDetail(status);
   const title = generationTitle(status, detail);
-  const stateLabel = label === "抓取" && state === "scanning" ? "抓取中" : generationStateLabel(state);
-  const showScanProgress = !showCounts && (Boolean(status?.result) || state === "scanning" || (status?.scannedCount ?? 0) > 0 || (status?.addedCount ?? 0) > 0);
+  const stateLabel = loading ? "加载中" : !status ? "状态未知" : label === "抓取" && state === "scanning" ? "抓取中" : generationStateLabel(state);
+  const showScanProgress = !loading && !showCounts && (Boolean(status?.result) || state === "scanning" || (status?.scannedCount ?? 0) > 0 || (status?.addedCount ?? 0) > 0);
   const scannedLabel = label === "抓取" ? "已抓取" : "已扫描";
   return (
     <div className="admin-gen-col">
@@ -258,9 +273,9 @@ function DriveGenCol({
       )}
       {showCounts && (
         <div className="admin-gen-col__counts">
-          <div className="admin-gen-col__count"><span>就绪</span><strong>{ready ?? 0}</strong></div>
-          <div className="admin-gen-col__count"><span>待生成</span><strong>{pending ?? 0}</strong></div>
-          <div className="admin-gen-col__count"><span>失败</span><strong>{failed ?? 0}</strong></div>
+          <div className="admin-gen-col__count"><span>就绪</span><strong>{countsLoading ? "—" : ready ?? 0}</strong></div>
+          <div className="admin-gen-col__count"><span>待生成</span><strong>{countsLoading ? "—" : pending ?? 0}</strong></div>
+          <div className="admin-gen-col__count"><span>失败</span><strong>{countsLoading ? "—" : failed ?? 0}</strong></div>
           {(extra ?? 0) > 0 && (
             <div className="admin-gen-col__count"><span>待补时长</span><strong>{extra}</strong></div>
           )}

@@ -15,12 +15,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/video-site/backend/internal/catalog"
+	"github.com/video-site/backend/internal/driveevents"
 	"github.com/video-site/backend/internal/drives/guangyapan"
 	"github.com/video-site/backend/internal/drives/p115"
 	"github.com/video-site/backend/internal/drives/p123"
 	"github.com/video-site/backend/internal/drives/quark"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/wopan"
+	"github.com/video-site/backend/internal/driveview"
 	"github.com/video-site/backend/internal/scopedproxy"
 )
 
@@ -342,6 +344,10 @@ func (a *AdminServer) handleRescan(w http.ResponseWriter, r *http.Request) {
 		accepted = a.OnScanRequested(r.Context(), id)
 	}
 	resp := map[string]any{"ok": true, "accepted": accepted}
+	if a.Catalog != nil {
+		a.Catalog.DriveEvents().Notify(id, true, driveevents.ActivityChanged)
+	}
+	a.addDriveSnapshot(r.Context(), resp, id, driveview.Runtime)
 	if !accepted {
 		resp["message"] = driveTaskBusyMessage
 	}
@@ -354,10 +360,12 @@ func (a *AdminServer) handleStopDriveTasks(w http.ResponseWriter, r *http.Reques
 	if a.OnStopDriveTasks != nil {
 		stopped = a.OnStopDriveTasks(id)
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"ok":      true,
-		"stopped": stopped,
-	})
+	resp := map[string]any{"ok": true, "stopped": stopped}
+	if a.Catalog != nil {
+		a.Catalog.DriveEvents().Notify(id, true, driveevents.ActivityChanged)
+	}
+	a.addDriveSnapshot(r.Context(), resp, id, driveview.Runtime)
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 func (a *AdminServer) p123QRClient() *p123.QRClient {
@@ -679,6 +687,7 @@ func (a *AdminServer) handleSetDriveSkipDirs(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	resp := map[string]any{"ok": true, "skipDirIds": cleaned}
+	a.addDriveSnapshot(r.Context(), resp, id, driveview.Config)
 	if deferred {
 		resp["deferred"] = true
 		resp["message"] = driveConfigDeferredMessage

@@ -67,7 +67,7 @@ test("admin tags keep builtin, user, and auto-generated tag management", () => {
   assert.doesNotMatch(apiSource, /llmEnabled|llmPending/);
   assert.doesNotMatch(tagsPageSource, /编辑标签：/);
   assert.doesNotMatch(tagsPageSource, /<h1 className="admin-page__title">标签管理<\/h1>/);
-  assert.match(tagsPageSource, /<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>/);
+  assert.match(tagsPageSource, /<div className="admin-tags-board" aria-busy=\{loading \|\| tagsResource\.refreshing \|\| undefined\}>/);
   assert.match(tagsPageSource, /<aside className="admin-tags-filter-panel" aria-label="标签分类">/);
   assert.match(tagsPageSource, /<div className="admin-tags-main">/);
   assert.ok(

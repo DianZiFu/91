@@ -25,6 +25,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/crawlerupload"
+	"github.com/video-site/backend/internal/driveevents"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/mediaimport"
@@ -408,6 +409,7 @@ func main() {
 		GetTagJobStatus: func() api.TagJobStatus {
 			return app.tagJobStatus()
 		},
+		GetDriveGenerationStatus: app.driveGenerationStatus,
 		GetDriveGenerationStatuses: func() map[string]api.DriveGenerationStatuses {
 			return app.driveGenerationStatuses()
 		},
@@ -459,6 +461,7 @@ func main() {
 	// 云盘扫描、本地资产对账和全库重复维护，不触发爬虫、迁移或恢复，也不占用当天的定时执行标记。
 	liveSettings := app.liveConfigSettings()
 	app.nightlyRunner = nightly.New(nightly.Config{
+		OnStatusChanged:             func() { cat.DriveEvents().Notify("", true, driveevents.ActivityChanged) },
 		Settings:                    cat,
 		Disabled:                    liveSettings.NightlyDisabled,
 		StartTime:                   liveSettings.NightlyStartTime,

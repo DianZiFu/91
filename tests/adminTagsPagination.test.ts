@@ -54,7 +54,7 @@ test("admin tags loading keeps the fixed controls and leaves the card area blank
   );
   assert.match(
     tagsPageSource,
-    /<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>\s*<div className="admin-tags-cards">\s*\{loading \? null : loadError \? \(/
+    /<div className="admin-tags-board" aria-busy=\{loading \|\| tagsResource\.refreshing \|\| undefined\}>\s*<div className="admin-tags-cards">\s*\{loading \? null : loadError \? \(/
   );
 });
 
@@ -66,7 +66,7 @@ test("admin tag empty states distinguish an empty catalog from no results", () =
   assert.match(tagsPageSource, /searchEmpty \? " is-search-empty" : ""/);
   assert.match(
     tagsPageSource,
-    /tagsEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="empty"[\s\S]*?text="当前没有标签"[\s\S]*?admin-tags-empty-state[\s\S]*?\) : resultsEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?admin-tags-empty-state[\s\S]*?\) : \(\s*<div className="admin-tags-board" aria-busy=\{loading \|\| undefined\}>/
+    /tagsEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="empty"[\s\S]*?text="当前没有标签"[\s\S]*?admin-tags-empty-state[\s\S]*?\) : resultsEmpty \? \(\s*<AdminEmptyVisual[\s\S]*?variant="no-results"[\s\S]*?text="未查询到"[\s\S]*?admin-tags-empty-state[\s\S]*?\) : \(\s*<div className="admin-tags-board" aria-busy=\{loading \|\| tagsResource\.refreshing \|\| undefined\}>/
   );
   assert.doesNotMatch(tagsPageSource, /没有找到匹配的标签。|className="admin-card admin-empty"/);
   assert.match(

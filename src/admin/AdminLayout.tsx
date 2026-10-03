@@ -25,10 +25,8 @@ import { Modal } from "./Modal";
 import { getAdminPageTitle, shouldShowAdminPageHeader } from "./adminPageTitle";
 import { preloadRemainingAdminPageModules } from "./adminPagePreload";
 import { SpiderIcon } from "./icons/SpiderIcon";
-import {
-  useSyncTelegramAvailability,
-  useTelegramAvailability,
-} from "./telegram/useTelegramAvailability";
+import { useTelegramAvailability } from "./telegram/useTelegramAvailability";
+import { TelegramStatusProvider } from "./telegram/TelegramStatusProvider";
 import {
   resolveAdminScrollTarget,
   type AdminScrollRouteIdentity,
@@ -74,6 +72,16 @@ function useAdminPageModulePreload(pathname: string) {
 }
 
 export function AdminLayout() {
+  const location = useLocation();
+  const { invalidateSession } = useAuth();
+  return (
+    <TelegramStatusProvider workspaceActive={location.pathname.startsWith("/admin/telegram")} onUnauthorized={invalidateSession}>
+      <AdminLayoutContent />
+    </TelegramStatusProvider>
+  );
+}
+
+function AdminLayoutContent() {
   const { logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -104,7 +112,6 @@ export function AdminLayout() {
   }, "menu");
 
   useAdminPageModulePreload(location.pathname);
-  useSyncTelegramAvailability(location.pathname);
   const { enabled: telegramEnabled } = useTelegramAvailability();
 
   useEffect(() => {

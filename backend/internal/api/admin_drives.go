@@ -10,7 +10,95 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	drivepkg "github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
+	"github.com/video-site/backend/internal/driveview"
+	"github.com/video-site/backend/internal/scanjob"
 )
+
+type driveConfigDTO struct {
+	ID                   string   `json:"id"`
+	Kind                 string   `json:"kind"`
+	Name                 string   `json:"name"`
+	RootID               string   `json:"rootId"`
+	ScanRootID           string   `json:"scanRootId"`
+	Status               string   `json:"status"`
+	LastError            string   `json:"lastError,omitempty"`
+	HasCredential        bool     `json:"hasCredential"`
+	CanUpload            bool     `json:"canUpload"`
+	SkipDirIDs           []string `json:"skipDirIds"`
+	LastCrawlAt          int64    `json:"lastCrawlAt,omitempty"`
+	STRMAllowOutsideRoot *bool    `json:"strmAllowOutsideRoot,omitempty"`
+}
+
+type driveRuntimeDTO struct {
+	ScanGenerationStatus        GenerationStatus  `json:"scanGenerationStatus"`
+	ThumbnailGenerationStatus   GenerationStatus  `json:"thumbnailGenerationStatus"`
+	PreviewGenerationStatus     GenerationStatus  `json:"previewGenerationStatus"`
+	FingerprintGenerationStatus GenerationStatus  `json:"fingerprintGenerationStatus"`
+	MaintenanceStatus           *NightlyJobStatus `json:"maintenanceStatus,omitempty"`
+}
+
+type driveStatsDTO struct {
+	ThumbnailReadyCount           int `json:"thumbnailReadyCount"`
+	ThumbnailPendingCount         int `json:"thumbnailPendingCount"`
+	ThumbnailFailedCount          int `json:"thumbnailFailedCount"`
+	ThumbnailDurationPendingCount int `json:"thumbnailDurationPendingCount"`
+	TeaserReadyCount              int `json:"teaserReadyCount"`
+	TeaserPendingCount            int `json:"teaserPendingCount"`
+	TeaserFailedCount             int `json:"teaserFailedCount"`
+	FingerprintReadyCount         int `json:"fingerprintReadyCount"`
+	FingerprintPendingCount       int `json:"fingerprintPendingCount"`
+	FingerprintFailedCount        int `json:"fingerprintFailedCount"`
+}
+
+type driveDTO struct {
+	driveConfigDTO
+	driveRuntimeDTO
+	driveStatsDTO
+}
+
+func driveConfig(d *catalog.Drive) driveConfigDTO {
+	hasCredential := false
+	for key := range d.Credentials {
+		if key != "last_crawl_at" {
+			hasCredential = true
+			break
+		}
+	}
+	lastCrawlAt, _ := strconv.ParseInt(d.Credentials["last_crawl_at"], 10, 64)
+	return driveConfigDTO{
+		ID: d.ID, Kind: d.Kind, Name: d.Name, RootID: d.RootID, ScanRootID: d.ScanRootID,
+		Status: d.Status, LastError: d.LastError, HasCredential: hasCredential,
+		CanUpload:  drivepkg.CapabilitiesForKind(d.Kind).Upload,
+		SkipDirIDs: append([]string{}, d.SkipDirIDs...), LastCrawlAt: lastCrawlAt,
+		STRMAllowOutsideRoot: strmAllowOutsideRootForDrive(d),
+	}
+}
+
+func driveRuntime(generation DriveGenerationStatuses, result *scanjob.Result) driveRuntimeDTO {
+	if result != nil && (generation.Scan.State == "" || generation.Scan.State == "idle") {
+		generation.Scan.State = string(result.State)
+		generation.Scan.ScannedCount = result.ScannedCount
+		generation.Scan.AddedCount = result.AddedCount
+		generation.Scan.Result = result
+	}
+	for _, status := range []*GenerationStatus{&generation.Scan, &generation.Thumbnail, &generation.Preview, &generation.Fingerprint} {
+		if status.State == "" {
+			status.State = "idle"
+		}
+	}
+	return driveRuntimeDTO{ScanGenerationStatus: generation.Scan, ThumbnailGenerationStatus: generation.Thumbnail,
+		PreviewGenerationStatus: generation.Preview, FingerprintGenerationStatus: generation.Fingerprint}
+}
+
+func driveStats(id string, stats catalog.DriveAssetStats) driveStatsDTO {
+	thumb, teaser, fingerprint := stats.Thumbnails[id], stats.Teasers[id], stats.Fingerprints[id]
+	return driveStatsDTO{
+		ThumbnailReadyCount: thumb.Ready, ThumbnailPendingCount: thumb.Pending, ThumbnailFailedCount: thumb.Failed,
+		ThumbnailDurationPendingCount: thumb.DurationPending, TeaserReadyCount: teaser.Ready, TeaserPendingCount: teaser.Pending,
+		TeaserFailedCount: teaser.Failed, FingerprintReadyCount: fingerprint.Ready,
+		FingerprintPendingCount: fingerprint.Pending, FingerprintFailedCount: fingerprint.Failed,
+	}
+}
 
 func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -18,10 +106,6 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, r, http.StatusInternalServerError, err)
 		return
-	}
-	generationStatuses := map[string]DriveGenerationStatuses{}
-	if a.GetDriveGenerationStatuses != nil {
-		generationStatuses = a.GetDriveGenerationStatuses()
 	}
 	assetStats, err := a.Catalog.CountDriveAssetStats(r.Context())
 	if err != nil {
@@ -33,110 +117,20 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	// 出参不返回凭证明文，只告诉前端是否已配置
-	type out struct {
-		ID            string `json:"id"`
-		Kind          string `json:"kind"`
-		Name          string `json:"name"`
-		RootID        string `json:"rootId"`
-		ScanRootID    string `json:"scanRootId"`
-		Status        string `json:"status"`
-		LastError     string `json:"lastError,omitempty"`
-		HasCredential bool   `json:"hasCredential"`
-		CanUpload     bool   `json:"canUpload"`
-		// SkipDirIDs 是用户在 admin 配置的"扫描跳过目录"集合（drive 侧目录 fileID）。
-		// 前端用它在"设置跳过目录"弹窗里回显已选项；JSON 字段名 camelCase 与
-		// catalog.Drive 保持一致。
-		SkipDirIDs  []string `json:"skipDirIds"`
-		LastCrawlAt int64    `json:"lastCrawlAt,omitempty"`
-		// STRMAllowOutsideRoot 是 localstorage 的 .strm 越root开关；其它 kind 省略。
-		STRMAllowOutsideRoot          *bool            `json:"strmAllowOutsideRoot,omitempty"`
-		ScanGenerationStatus          GenerationStatus `json:"scanGenerationStatus"`
-		ThumbnailGenerationStatus     GenerationStatus `json:"thumbnailGenerationStatus"`
-		PreviewGenerationStatus       GenerationStatus `json:"previewGenerationStatus"`
-		FingerprintGenerationStatus   GenerationStatus `json:"fingerprintGenerationStatus"`
-		ThumbnailReadyCount           int              `json:"thumbnailReadyCount"`
-		ThumbnailPendingCount         int              `json:"thumbnailPendingCount"`
-		ThumbnailFailedCount          int              `json:"thumbnailFailedCount"`
-		ThumbnailDurationPendingCount int              `json:"thumbnailDurationPendingCount"`
-		TeaserReadyCount              int              `json:"teaserReadyCount"`
-		TeaserPendingCount            int              `json:"teaserPendingCount"`
-		TeaserFailedCount             int              `json:"teaserFailedCount"`
-		FingerprintReadyCount         int              `json:"fingerprintReadyCount"`
-		FingerprintPendingCount       int              `json:"fingerprintPendingCount"`
-		FingerprintFailedCount        int              `json:"fingerprintFailedCount"`
+	generationStatuses := map[string]DriveGenerationStatuses{}
+	if a.GetDriveGenerationStatuses != nil {
+		generationStatuses = a.GetDriveGenerationStatuses()
 	}
-	list := make([]out, 0, len(drives))
+	list := make([]driveDTO, 0, len(drives))
 	for _, d := range drives {
 		if isCrawlerDriveKind(d.Kind) {
 			continue
 		}
-		counts := assetStats.Teasers[d.ID]
-		thumbCounts := assetStats.Thumbnails[d.ID]
-		fingerprintCount := assetStats.Fingerprints[d.ID]
-		generation := generationStatuses[d.ID]
-		if result, ok := scanResults[d.ID]; ok && (generation.Scan.State == "" || generation.Scan.State == "idle") {
-			generation.Scan.State = string(result.State)
-			generation.Scan.ScannedCount = result.ScannedCount
-			generation.Scan.AddedCount = result.AddedCount
-			generation.Scan.Result = &result
+		var result *scanjob.Result
+		if saved, ok := scanResults[d.ID]; ok {
+			result = &saved
 		}
-		if generation.Scan.State == "" {
-			generation.Scan.State = "idle"
-		}
-		if generation.Thumbnail.State == "" {
-			generation.Thumbnail.State = "idle"
-		}
-		if generation.Preview.State == "" {
-			generation.Preview.State = "idle"
-		}
-		if generation.Fingerprint.State == "" {
-			generation.Fingerprint.State = "idle"
-		}
-		// last_crawl_at 是后端自动写入的运行状态字段，不计入 hasCredential 判定。
-		hasCred := false
-		userCredKeys := 0
-		for k := range d.Credentials {
-			if k == "last_crawl_at" {
-				continue
-			}
-			userCredKeys++
-		}
-		hasCred = userCredKeys > 0
-
-		var lastCrawlAt int64
-		if d.Credentials != nil {
-			if raw, ok := d.Credentials["last_crawl_at"]; ok && raw != "" {
-				if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
-					lastCrawlAt = v
-				}
-			}
-		}
-
-		list = append(list, out{
-			ID: d.ID, Kind: d.Kind, Name: d.Name,
-			RootID: d.RootID, ScanRootID: d.ScanRootID,
-			Status: d.Status, LastError: d.LastError,
-			HasCredential:                 hasCred,
-			CanUpload:                     drivepkg.CapabilitiesForKind(d.Kind).Upload,
-			SkipDirIDs:                    append([]string{}, d.SkipDirIDs...),
-			LastCrawlAt:                   lastCrawlAt,
-			STRMAllowOutsideRoot:          strmAllowOutsideRootForDrive(d),
-			ScanGenerationStatus:          generation.Scan,
-			ThumbnailGenerationStatus:     generation.Thumbnail,
-			PreviewGenerationStatus:       generation.Preview,
-			FingerprintGenerationStatus:   generation.Fingerprint,
-			ThumbnailReadyCount:           thumbCounts.Ready,
-			ThumbnailPendingCount:         thumbCounts.Pending,
-			ThumbnailFailedCount:          thumbCounts.Failed,
-			ThumbnailDurationPendingCount: thumbCounts.DurationPending,
-			TeaserReadyCount:              counts.Ready,
-			TeaserPendingCount:            counts.Pending,
-			TeaserFailedCount:             counts.Failed,
-			FingerprintReadyCount:         fingerprintCount.Ready,
-			FingerprintPendingCount:       fingerprintCount.Pending,
-			FingerprintFailedCount:        fingerprintCount.Failed,
-		})
+		list = append(list, driveDTO{driveConfig(d), driveRuntime(generationStatuses[d.ID], result), driveStats(d.ID, assetStats)})
 	}
 	writeJSON(w, http.StatusOK, list)
 }
@@ -278,6 +272,7 @@ func (a *AdminServer) handleUpsertDrive(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	resp := map[string]any{"ok": true}
+	a.addDriveSnapshot(r.Context(), resp, body.ID, driveview.Config)
 	if deferred {
 		resp["deferred"] = true
 		resp["message"] = driveConfigDeferredMessage

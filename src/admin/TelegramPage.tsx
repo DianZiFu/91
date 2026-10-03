@@ -17,6 +17,9 @@ import { useToast } from "@/components/ToastContext";
 import { formatBytes } from "./storageFormat";
 import { importStageLabel } from "./telegram/config";
 import { useTelegramAvailability } from "./telegram/useTelegramAvailability";
+import { useTelegramStatus } from "./telegram/TelegramStatusProvider";
+import { useAdminResource } from "./useAdminResource";
+import { useAuth } from "./AuthContext";
 import { TelegramUploadSettings } from "./telegram/TelegramUploadSettings";
 import "@/styles/telegram.css";
 
@@ -67,46 +70,19 @@ export function TelegramPage() {
 function TelegramWorkspace() {
   const active = useAdminRouteActive();
   const { show } = useToast();
-  const [status, setStatus] = useState<api.TelegramStatus>();
-  const [jobs, setJobs] = useState<api.ImportJob[]>([]);
+  const { invalidateSession } = useAuth();
+  const statusResource = useTelegramStatus();
+  const jobsResource = useAdminResource((signal) => api.listTelegramImports(RECENT_IMPORT_LIMIT, signal), {
+    queryKey: "telegram-imports", active, initialData: [], onUnauthorized: invalidateSession,
+    intervalMs: (items) => items.some((job) => activeImportStates.has(job.state)) ? 5000 : 15_000,
+  });
+  const status = statusResource.data;
+  const jobs = jobsResource.data.slice(0, RECENT_IMPORT_LIMIT);
+  const loading = jobsResource.loading;
+  const error = jobsResource.error;
   const [filter, setFilter] = useState("");
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
-  const [refresh, setRefresh] = useState(0);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!active) return;
-    setLoading(true);
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const [connection, tasks] = await Promise.all([
-          api.getTelegramStatus(),
-          api.listTelegramImports(RECENT_IMPORT_LIMIT),
-        ]);
-        if (!disposed) {
-          setStatus(connection);
-          setJobs(tasks.slice(0, RECENT_IMPORT_LIMIT));
-          setError("");
-        }
-      } catch (err) {
-        if (!disposed)
-          setError(err instanceof Error ? err.message : "加载失败");
-      }
-      if (!disposed) {
-        setLoading(false);
-        timer = setTimeout(poll, 5000);
-      }
-    };
-    void poll();
-    return () => {
-      disposed = true;
-      clearTimeout(timer);
-    };
-  }, [active, refresh]);
 
   const filteredJobs = jobs.filter(
     (job) =>
@@ -124,11 +100,11 @@ function TelegramWorkspace() {
     setPage((current) => Math.min(current, totalPages));
   }, [totalPages]);
 
-  async function run(name: string, action: () => Promise<void>) {
+  async function run(name: string, action: () => Promise<void>, target: "status" | "jobs" = "status") {
     setBusy(name);
     try {
       await action();
-      setRefresh((n) => n + 1);
+      await (target === "jobs" ? jobsResource : statusResource).invalidate();
     } catch (err) {
       show(err instanceof Error ? err.message : "操作失败", "error");
     } finally {
@@ -151,11 +127,12 @@ function TelegramWorkspace() {
 
   return (
     <div className="admin-page telegram-page">
-      {error && (
-        <p className="tg-error" role="alert">
-          {error}
-        </p>
-      )}
+      {[statusResource, jobsResource].map((resource, index) => resource.error && (
+        <div className="tg-actions" key={index}>
+          <p className="tg-error" role="alert">{resource.error}</p>
+          <button type="button" className="admin-btn" onClick={() => void resource.refresh()}>重试</button>
+        </div>
+      ))}
       <div className="tg-overview">
         <section className="tg-panel" aria-labelledby="tg-connection">
           <div className="tg-heading">
@@ -329,7 +306,7 @@ function TelegramWorkspace() {
                       onClick={() =>
                         void run(job.id, async () => {
                           await api.cancelImport(job.id);
-                        })
+                        }, "jobs")
                       }
                     >
                       取消
@@ -342,7 +319,7 @@ function TelegramWorkspace() {
                       onClick={() =>
                         void run(job.id, async () => {
                           await api.retryImport(job.id);
-                        })
+                        }, "jobs")
                       }
                     >
                       重试

@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/video-site/backend/internal/dedupe"
+	"github.com/video-site/backend/internal/driveevents"
 )
 
 // InsertScannedVideo admits a new scan row only if neither its source identity
@@ -32,6 +33,8 @@ func (c *Catalog) InsertScannedVideo(ctx context.Context, v *Video, seenFileIDs 
 	defer func() {
 		if !committed {
 			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		} else {
+			c.driveEvents.Notify("", false, driveevents.MediaChanged)
 		}
 	}()
 
@@ -77,7 +80,8 @@ func (c *Catalog) FindScannedVideoDuplicate(ctx context.Context, v *Video, seenF
 
 // RecordScannedDuplicate records the observed match for an already admitted
 // row. It does not tombstone the file or change later admission decisions.
-func (c *Catalog) RecordScannedDuplicate(ctx context.Context, source, duplicate *Video) error {
+func (c *Catalog) RecordScannedDuplicate(ctx context.Context, source, duplicate *Video) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	return recordScannedDuplicate(ctx, c.db, source, duplicate, DuplicateOutcomeExisting)
 }
 

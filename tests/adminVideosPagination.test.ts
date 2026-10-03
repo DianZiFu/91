@@ -70,10 +70,8 @@ test("normal videos keep source navigation separate from composable advanced fil
   assert.doesNotMatch(videosPageSource, /function VideoSourcePicker|admin-video-source-picker/);
   assert.match(sourceNavigationSource, /role="group" aria-label="视频来源筛选"/);
   assert.match(sourceNavigationSource, /\{ key: "all", label: "全部", all: true \}/);
-  assert.match(videosPageSource, /const \[sourceCatalogLoaded, setSourceCatalogLoaded\] = useState\(false\);/);
-  assert.match(videosPageSource, /const \[hasLocalUploads, setHasLocalUploads\] = useState\(false\);/);
-  assert.match(videosPageSource, /setHasLocalUploads\(localUploadResult\.value\.total > 0\);/);
-  assert.match(videosPageSource, /setSourceCatalogLoaded\(true\);/);
+  assert.match(videosPageSource, /const sourceCatalogLoaded = sources\.some\(\(resource\) => resource\.ready\)/);
+  assert.match(videosPageSource, /const hasLocalUploads = \(localResource\.data\?\.total \?\? 0\) > 0;/);
   assert.match(videosPageSource, /hasLocalUploads=\{hasLocalUploads\}/);
   assert.match(videosPageSource, /sourceCatalogLoaded=\{sourceCatalogLoaded\}/);
   assert.match(sourceNavigationSource, /if \(sourceCatalogLoaded\) \{[\s\S]*?sourceItems\.push\(/);
@@ -135,8 +133,10 @@ test("normal videos keep source navigation separate from composable advanced fil
   );
   assert.match(videosPageSource, /function openNativeDatePicker\(input: HTMLInputElement\)[\s\S]*?input\.showPicker\(\)/);
   assert.doesNotMatch(videosPageSource, /视频时间|publishedFrom|publishedTo/);
-  assert.match(videosPageSource, /Promise\.allSettled\(\[[\s\S]*?api\.listDrives\(\),[\s\S]*?api\.listCrawlers\(\),[\s\S]*?api\.listVideos\(\{ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 \}\),[\s\S]*?\]\)/);
-  assert.match(videosPageSource, /void api\.listTags\(\)/);
+  assert.match(videosPageSource, /useAdminResource\(api\.listDrives/);
+  assert.match(videosPageSource, /useAdminResource\(api\.listCrawlers/);
+  assert.match(videosPageSource, /api\.listVideos\(\{ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 \}, signal\)/);
+  assert.match(videosPageSource, /useAdminResource\(api\.listTags/);
   assert.match(videosPageSource, /setAppliedFilters\(\{ \.\.\.draftFilters \}\)/);
   assert.match(clearFiltersSource, /setDraftFilters\(\{ \.\.\.EMPTY_VIDEO_FILTERS \}\)/);
   assert.doesNotMatch(clearFiltersSource, /setAppliedFilters|setPage|setAdvancedFiltersOpen/);
@@ -222,7 +222,7 @@ test("blacklist navigation switches immediately while its initial list stays bla
   assert.doesNotMatch(openBlacklistSource, /await|api\.listBlacklist|blacklistOpening/);
   assert.match(videosPageSource, /onClick=\{onOpenBlacklist\}/);
   assert.match(videosPageSource, /activeView === "blacklist"[\s\S]*?<BlacklistTab/);
-  assert.match(blacklistSource, /api\.listBlacklist\(\{ page, size: pageSize, keyword: searchKeyword \}\)/);
+  assert.match(blacklistSource, /api\.listBlacklist\(\{ page, size: pageSize, keyword: searchKeyword \}, signal\)/);
   assert.match(blacklistSource, /\{showInitialLoading \? null : loadError \? \(/);
   assert.doesNotMatch(blacklistSource, /AdminLoading|LoadingState/);
 });
@@ -239,7 +239,7 @@ test("admin video pagination clamps stale deep links after totals load", () => {
   assert.match(currentSource, clamp);
   assert.match(blacklistSource, clamp);
   assert.equal(
-    Array.from(videosPageSource.matchAll(/const listQuerySettled = !loading && resolvedListQueryKey === activeListQueryKey;/g)).length,
+    Array.from(videosPageSource.matchAll(/const listQuerySettled = (?:videos|blacklist)\.ready && !(?:videos|blacklist)\.refreshing && !(?:videos|blacklist)\.failure;/g)).length,
     2
   );
 });
@@ -316,7 +316,7 @@ test("current videos keep their skeleton while blacklist initial loading stays i
   assert.match(currentSource, /showInitialLoading \? \(\s*<VideoCardGridLoadingState \/>/);
   assert.match(blacklistSource, /\{showInitialLoading \? null : loadError \? \(/);
   assert.equal(
-    Array.from(videosPageSource.matchAll(/const showInitialLoading = displayedPage === null && !loadError && listQueryPending;/g)).length,
+    Array.from(videosPageSource.matchAll(/const showInitialLoading = \(displayedPage === null \|\| (?:listItems|list)\.length === 0\) && !loadError && listQueryPending;/g)).length,
     2
   );
   assert.match(videosPageSource, /const CURRENT_VIDEO_SKELETON_CARD_COUNT = 6;/);
@@ -345,9 +345,11 @@ test("video pagination keeps settled results visible while the next page loads",
     2
   );
   assert.equal(
-    Array.from(videosPageSource.matchAll(/setDisplayedPage\(page\);\s*setResolvedListQueryKey\(queryKey\);/g)).length,
+    Array.from(videosPageSource.matchAll(/const displayedPage = visibleResult\?\.page \?\? null;/g)).length,
     2
   );
+  assert.equal(Array.from(videosPageSource.matchAll(/inert: ""/g)).length, 2);
+  assert.equal(Array.from(videosPageSource.matchAll(/queryKey: activeListQueryKey/g)).length, 2);
   assert.match(adminCss, /\.admin-videos-results\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*gap:\s*14px;/s);
   assert.match(adminCss, /\.admin-videos-results\.is-page-loading \.admin-videos-results__content\s*\{[^}]*opacity:\s*0\.62;[^}]*pointer-events:\s*none;/s);
 });
@@ -386,14 +388,14 @@ test("admin videos track preview regeneration after it is accepted", () => {
   assert.doesNotMatch(videosPageSource, /data-label="预览视频"[\s\S]*?<PreviewStatus/);
   assert.match(videosPageSource, /onRegenPreview=\{\(\) => handleRegen\(editingVideo\)\}/);
   assert.match(videosPageSource, /className="admin-btn admin-video-preview-button"/);
-  assert.match(videosPageSource, /refreshListOnly\(\)/);
+  assert.match(videosPageSource, /void videos\.invalidate\(\)/);
 });
 
 test("admin videos keep generating status after page refresh", () => {
-  assert.match(videosPageSource, /const hasGeneratingPreview = list\.some\(\(v\) => v\.previewStatus === REGEN_PREVIEW_STATUS\);/);
+  assert.match(videosPageSource, /data\?\.items\?\.some\(\(video\) => video\.previewStatus === REGEN_PREVIEW_STATUS\)/);
   assert.match(
     videosPageSource,
-    /if \(!routeActive \|\| \(trackedRegenCount === 0 && !hasGeneratingPreview\)\) return;/
+    /intervalMs: \(data\) => trackedRegenCount > 0 \|\| data\?\.items\?\.some[\s\S]*?\? REGEN_PREVIEW_POLL_INTERVAL_MS : null/
   );
   assert.match(videosPageSource, /function isPreviewGenerating\(v: api\.AdminVideo\)/);
   assert.match(videosPageSource, /return !!regenPreviewById\[v\.id\] \|\| v\.previewStatus === REGEN_PREVIEW_STATUS;/);

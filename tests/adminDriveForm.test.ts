@@ -158,7 +158,7 @@ test("crawler upload target uses explicit local-save option instead of auto targ
   assert.match(combinedSource, /本地保存，不上传/);
   assert.match(
     crawlerPageSource,
-    /drives\.filter\(\(d\) => d\.canUpload\)/
+    /drives\.data\.filter\(\(drive\) => drive\.canUpload\)/
   );
   assert.match(apiSource, /canUpload: boolean/);
   assert.doesNotMatch(combinedSource, /自动：唯一/);
@@ -312,7 +312,7 @@ test("pikpak drive form presents email login before refresh token fallback", () 
 test("all existing drive edits submit credential deltas", () => {
   assert.match(
     drivesPageSource,
-    /const credentials = existing\s*\? changedCredentialValues\(/
+    /const credentials = editing\s*\? changedCredentialValues\(/
   );
   assert.doesNotMatch(
     drivesPageSource,
@@ -706,7 +706,7 @@ test("crawler management is a separate admin section", () => {
   assert.doesNotMatch(adminCss, /admin-crawler-(pipeline|stage)/);
   assert.doesNotMatch(crawlerPageSource, /teaserEnabled: form\.teaserEnabled/);
   assert.doesNotMatch(crawlerPageSource, /aria-pressed=\{form\.teaserEnabled\}/);
-  assert.match(crawlerPageSource, /drives\.filter\(\(d\) => d\.canUpload\)/);
+  assert.match(crawlerPageSource, /drives\.data\.filter\(\(drive\) => drive\.canUpload\)/);
   assert.doesNotMatch(crawlerPageSource, /新建脚本/);
   assert.doesNotMatch(crawlerPageSource, /爬虫 ID/);
   assert.doesNotMatch(crawlerPageSource, /crawler-id/);
@@ -849,7 +849,7 @@ test("drive list actions use ordinary text buttons in the requested positions", 
   );
   assert.match(
     drivesPageSource,
-    /<AdminPageActions>\s*<div className="admin-page__actions admin-drive-list-actions">[\s\S]*?<\/AdminPageActions>\s*\{\(storage \|\| loading\) && \(\s*<StorageSummary storage=\{storage\} loading=\{!storage\} \/>\s*\)\}/
+    /<AdminPageActions>\s*<div className="admin-page__actions admin-drive-list-actions">[\s\S]*?<\/AdminPageActions>\s*<StorageSummary storage=\{storage\} loading=\{listData\.storageLoading\} \/>/
   );
   assert.match(
     drivesPageSource,
@@ -922,7 +922,7 @@ test("drive loading keeps the storage summary shell and labels without value ske
   assert.match(storageSummarySource, /aria-busy=\{loading \|\| undefined\}/);
   assert.match(
     storageSummarySource,
-    /<strong aria-hidden=\{loading \|\| undefined\}>\s*\{loading \? "\\u00a0" : metric\.value\}\s*<\/strong>/
+    /<strong aria-hidden=\{loading \|\| undefined\}>\s*\{loading \? "\\u00a0" : metric\.value \|\| "\\u00a0"\}\s*<\/strong>/
   );
   assert.doesNotMatch(storageSummarySource, /admin-storage-summary__value-skeleton/);
   assert.doesNotMatch(adminCss, /admin-storage-summary__value-skeleton/);
@@ -1190,7 +1190,7 @@ test("drive generation panel shows scan or crawler status first", () => {
 });
 
 test("drive scan results follow generation status in a separate card", () => {
-  assert.match(drivesPageSource, /<DriveGenerationPanel[\s\S]*?<ScanResultDetails\s+result=\{d\.scanGenerationStatus\?\.result\}\s+scanning=\{isGenerationBusy\(d\.scanGenerationStatus\?\.state \?\? "idle"\)\}\s*\/>[\s\S]*?本地存储占用/);
+  assert.match(drivesPageSource, /<DriveGenerationPanel[\s\S]*?<ScanResultDetails\s+result=\{d\.scanGenerationStatus\?\.result\}\s+scanning=\{isGenerationBusy\(d\.scanGenerationStatus\?\.state \?\? "idle"\)\}\s+loading=\{!detail\.resources\.runtime\.data\}\s*\/>[\s\S]*?本地存储占用/);
   assert.doesNotMatch(driveComponentsSource, /ScanResultDetails|ScanStatusPanel/);
   assert.match(drivesPageLoadingSource, /生成状态[\s\S]*?<ScanResultDetails loading \/>[\s\S]*?本地存储占用/);
   assert.doesNotMatch(adminCss, /\.admin-drive-generation|\.admin-drive-scan__/);
@@ -1424,7 +1424,7 @@ test("drive skip directory selections auto-save without polling away local edits
   assert.doesNotMatch(skipDirsPanelSource, /等待任务完成后再修改跳过目录/);
   assert.doesNotMatch(skipDirsPanelSource, /修改后自动保存/);
   assert.match(skipDirsPanelSource, /saveStatus === "idle"[\s\S]*\? null/);
-  assert.match(drivesPageSource, /driveListRequestVersion\.current \+= 1/);
+  assert.match(drivesPageSource, /detail\.accept\(saved\.snapshot\)/);
   assert.doesNotMatch(
     drivesPageSource,
     /onSaved=\{\(saved\)[\s\S]*?refreshDriveList\(\);[\s\S]*?\}\}/

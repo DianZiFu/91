@@ -2,12 +2,16 @@ package catalog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 
+	"github.com/video-site/backend/internal/driveevents"
 	"github.com/video-site/backend/internal/scanjob"
 )
 
-func (c *Catalog) SaveScanResult(ctx context.Context, result scanjob.Result) error {
+func (c *Catalog) SaveScanResult(ctx context.Context, result scanjob.Result) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, result.DriveID, driveevents.ScanResultChanged)
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return err
@@ -41,4 +45,20 @@ WHERE id IN (SELECT MAX(id) FROM scans WHERE result IS NOT NULL GROUP BY drive_i
 		results[result.DriveID] = result
 	}
 	return results, rows.Err()
+}
+
+func (c *Catalog) LatestScanResult(ctx context.Context, driveID string) (*scanjob.Result, error) {
+	var payload string
+	err := c.db.QueryRowContext(ctx, `SELECT result FROM scans WHERE drive_id = ? AND result IS NOT NULL ORDER BY id DESC LIMIT 1`, driveID).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result scanjob.Result
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

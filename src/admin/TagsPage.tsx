@@ -8,7 +8,9 @@ import { Modal } from "./Modal";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { AdminPagination } from "./AdminPagination";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
-import { useAdminRouteRevalidation } from "./AdminRouteCache";
+import { useAdminRouteActive } from "./AdminRouteCache";
+import { useAdminResource } from "./useAdminResource";
+import { useAuth } from "./AuthContext";
 
 const DESKTOP_TAGS_PAGE_SIZE = 24;
 const MOBILE_TAGS_PAGE_SIZE = 8;
@@ -28,10 +30,14 @@ type DeleteConfirmState =
 
 export function TagsPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
-  const [tags, setTags] = useState<api.AdminTag[]>([]);
+  const routeActive = useAdminRouteActive();
+  const { invalidateSession } = useAuth();
+  const tagsResource = useAdminResource(api.listTags, {
+    queryKey: "tags", active: routeActive, intervalMs: null, initialData: [], onUnauthorized: invalidateSession,
+  });
+  const { data: tags, loading, invalidate: refresh } = tagsResource;
+  const loadError = tagsResource.ready ? "" : tagsResource.error;
   const [label, setLabel] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<DeleteConfirmState>(null);
@@ -46,33 +52,6 @@ export function TagsPage() {
   const pageSize = useTagsPageSize();
   const [page, setPage] = useState(1);
   const { show } = useToast();
-
-  async function refresh(silent = false) {
-    if (!silent) {
-      setLoading(true);
-      setLoadError("");
-    }
-    try {
-      setTags(await api.listTags());
-      setLoadError("");
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "加载标签失败";
-      if (!silent) {
-        setLoadError(message);
-        show(message, "error");
-      }
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  useAdminRouteRevalidation(() => {
-    void refresh(true);
-  });
 
   async function handleCreate() {
     const cleanLabel = label.trim();
@@ -264,6 +243,12 @@ export function TagsPage() {
       ref={floatingActionPageRef}
       className={`admin-page admin-page--with-floating-actions admin-tags-page${searchEmpty ? " is-search-empty" : ""}`}
     >
+      {tagsResource.ready && tagsResource.error && (
+        <div className="admin-detail-error" role="alert">
+          标签更新失败：{tagsResource.error}
+          <button type="button" className="admin-btn" onClick={() => void tagsResource.refresh()}>重试</button>
+        </div>
+      )}
       <div className="admin-tags-layout">
         <div className="admin-tags-main">
           <div className="admin-tags-toolbar">
@@ -339,13 +324,13 @@ export function TagsPage() {
               className="admin-empty-state admin-empty-state--plain admin-tags-empty-state"
             />
           ) : (
-            <div className="admin-tags-board" aria-busy={loading || undefined}>
+            <div className="admin-tags-board" aria-busy={loading || tagsResource.refreshing || undefined}>
               <div className="admin-tags-cards">
                 {loading ? null : loadError ? (
                   <div className="admin-error-state">
                     <strong>标签加载失败</strong>
                     <span>{loadError}</span>
-                    <button type="button" className="admin-btn" onClick={() => void refresh()}>
+                    <button type="button" className="admin-btn" onClick={() => void tagsResource.refresh()}>
                       <RefreshCw size={13} /> 重试
                     </button>
                   </div>

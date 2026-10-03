@@ -35,10 +35,10 @@ import {
   type AdminVideosSourceKey,
 } from "./videosSearchParams";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
-import {
-  useAdminRouteActive,
-  useAdminRouteRevalidation,
-} from "./AdminRouteCache";
+import { useAdminRouteActive } from "./AdminRouteCache";
+import { useAdminResource } from "./useAdminResource";
+import { useAuth } from "./AuthContext";
+import { useTelegramAvailability } from "./telegram/useTelegramAvailability";
 import { SearchPanel } from "@/components/SearchPanel";
 import { FilterAllIcon } from "@/components/icons/FilterAllIcon";
 import { LocalStorageIcon } from "@/components/icons/LocalStorageIcon";
@@ -54,18 +54,6 @@ const REGEN_PREVIEW_STATUS = "generating";
 const REGEN_PREVIEW_POLL_INTERVAL_MS = 2000;
 const REGEN_PREVIEW_TRACK_TIMEOUT_MS = 30 * 60 * 1000;
 const LOCAL_UPLOAD_SOURCE_ID = "local-upload";
-
-function requestVideoSourceCatalog() {
-  return Promise.allSettled([
-    api.listDrives(),
-    api.listCrawlers(),
-    api.listVideos({ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 }),
-    Promise.all([
-      api.getTelegramStatus(),
-      api.listVideos({ sourceKind: "telegram", page: 1, size: 1 }),
-    ]).then(([status, videos]) => status.connection.enabled && videos.total > 0),
-  ]);
-}
 
 type VideoViewKey = "current" | "blacklist";
 type PageSetter = Dispatch<SetStateAction<number>>;
@@ -96,13 +84,27 @@ const EMPTY_VIDEO_FILTERS: VideoAdvancedFilterValues = {
 export function VideosPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [drives, setDrives] = useState<api.AdminDrive[]>([]);
-  const [crawlers, setCrawlers] = useState<api.AdminCrawler[]>([]);
-  const [hasLocalUploads, setHasLocalUploads] = useState(false);
-  const [hasTelegramVideos, setHasTelegramVideos] = useState(false);
-  const [sourceCatalogLoaded, setSourceCatalogLoaded] = useState(false);
-  const sourceCatalogRequestRef = useRef(0);
-  const { show } = useToast();
+  const routeActive = useAdminRouteActive();
+  const { invalidateSession } = useAuth();
+  const { enabled: telegramEnabled } = useTelegramAvailability();
+  const driveResource = useAdminResource(api.listDrives, {
+    queryKey: "video-drives", active: routeActive, intervalMs: null, initialData: [], onUnauthorized: invalidateSession,
+  });
+  const crawlerResource = useAdminResource(api.listCrawlers, {
+    queryKey: "video-crawlers", active: routeActive, intervalMs: null, initialData: [], onUnauthorized: invalidateSession,
+  });
+  const localResource = useAdminResource<api.AdminVideoList | null>(
+    (signal) => api.listVideos({ driveId: LOCAL_UPLOAD_SOURCE_ID, page: 1, size: 1 }, signal),
+    { queryKey: "local-video-source", active: routeActive, intervalMs: null, initialData: null, onUnauthorized: invalidateSession });
+  const telegramResource = useAdminResource<api.AdminVideoList | null>(
+    (signal) => api.listVideos({ sourceKind: "telegram", page: 1, size: 1 }, signal),
+    { queryKey: "telegram-video-source", active: routeActive, intervalMs: null, initialData: null, onUnauthorized: invalidateSession });
+  const drives = driveResource.data;
+  const crawlers = crawlerResource.data;
+  const hasLocalUploads = (localResource.data?.total ?? 0) > 0;
+  const hasTelegramVideos = telegramEnabled === true && (telegramResource.data?.total ?? 0) > 0;
+  const sources = [driveResource, crawlerResource, localResource, telegramResource];
+  const sourceCatalogLoaded = sources.some((resource) => resource.ready) || sources.every((resource) => !resource.loading);
   const rawTab = searchParams.get("tab");
   const activeView: VideoViewKey = rawTab === "blacklist" ? "blacklist" : "current";
   const activeSourceKey = readAdminVideosSourceKey(searchParams);
@@ -118,64 +120,6 @@ export function VideosPage() {
       { replace: true }
     );
   }, [setSearchParams]);
-
-  const refreshSourceCatalog = useCallback(
-    async (reportErrors = true) => {
-      const requestID = ++sourceCatalogRequestRef.current;
-      const results = await requestVideoSourceCatalog();
-      if (requestID !== sourceCatalogRequestRef.current) return;
-      const [driveResult, crawlerResult, localUploadResult, telegramResult] = results;
-
-      if (driveResult.status === "fulfilled") {
-        setDrives(driveResult.value ?? []);
-      } else if (reportErrors) {
-        show(
-          driveResult.reason instanceof Error
-            ? driveResult.reason.message
-            : "网盘来源加载失败",
-          "error"
-        );
-      }
-      if (crawlerResult.status === "fulfilled") {
-        setCrawlers(crawlerResult.value ?? []);
-      } else if (reportErrors) {
-        show(
-          crawlerResult.reason instanceof Error
-            ? crawlerResult.reason.message
-            : "爬虫来源加载失败",
-          "error"
-        );
-      }
-      if (localUploadResult.status === "fulfilled") {
-        setHasLocalUploads(localUploadResult.value.total > 0);
-      } else if (reportErrors) {
-        show(
-          localUploadResult.reason instanceof Error
-            ? localUploadResult.reason.message
-            : "本地存储来源加载失败",
-          "error"
-        );
-      }
-      if (telegramResult.status === "fulfilled") {
-        setHasTelegramVideos(telegramResult.value);
-      } else if (reportErrors) {
-        show("Telegram 来源加载失败", "error");
-      }
-      setSourceCatalogLoaded(true);
-    },
-    [show]
-  );
-
-  useEffect(() => {
-    void refreshSourceCatalog();
-    return () => {
-      sourceCatalogRequestRef.current += 1;
-    };
-  }, [refreshSourceCatalog]);
-
-  useAdminRouteRevalidation(() => {
-    void refreshSourceCatalog(false);
-  });
 
   function selectSource(sourceKey: AdminVideosSourceKey) {
     setSearchParams(
@@ -206,6 +150,12 @@ export function VideosPage() {
       ref={floatingActionPageRef}
       className="admin-page admin-page--with-floating-actions admin-videos-page"
     >
+      {[driveResource, crawlerResource, localResource, telegramResource].map((resource, index) => resource.error && (
+        <div className="admin-detail-error" role="alert" key={index}>
+          来源信息更新失败：{resource.error}
+          <button type="button" className="admin-btn" onClick={() => void resource.refresh()}>重试</button>
+        </div>
+      ))}
       <VideoSourceNavigation
         drives={drives}
         crawlers={crawlers}
@@ -395,16 +345,12 @@ function CurrentVideosTab({
   setPage: PageSetter;
 }) {
   const routeActive = useAdminRouteActive();
-  const [list, setList] = useState<api.AdminVideo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const { invalidateSession } = useAuth();
   const [searchKeyword, setSearchKeyword] = useState("");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [draftFilters, setDraftFilters] = useState<VideoAdvancedFilterValues>(() => ({ ...EMPTY_VIDEO_FILTERS }));
   const [appliedFilters, setAppliedFilters] = useState<VideoAdvancedFilterValues>(() => ({ ...EMPTY_VIDEO_FILTERS }));
-  const [total, setTotal] = useState(0);
   const [editing, setEditing] = useState<api.AdminVideo | null>(null);
-  const [availableTags, setAvailableTags] = useState<api.AdminTag[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [batchDeleting, setBatchDeleting] = useState(false);
@@ -413,9 +359,6 @@ function CurrentVideosTab({
   const [deleting, setDeleting] = useState(false);
   const [deleteSource, setDeleteSource] = useState(false);
   const [regenPreviewById, setRegenPreviewById] = useState<Record<string, RegenPreviewState>>({});
-  const [displayedPage, setDisplayedPage] = useState<number | null>(null);
-  const [resolvedListQueryKey, setResolvedListQueryKey] = useState("");
-  const listRequestIdRef = useRef(0);
   const pageSize = useVideosPageSize(
     DESKTOP_CURRENT_VIDEOS_PAGE_SIZE,
     MOBILE_CURRENT_VIDEOS_PAGE_SIZE
@@ -431,87 +374,28 @@ function CurrentVideosTab({
     sourceKind,
     appliedFilters,
   ]);
-  const activeListQueryKeyRef = useRef(activeListQueryKey);
-  activeListQueryKeyRef.current = activeListQueryKey;
-
-  async function refresh() {
-    const requestId = ++listRequestIdRef.current;
-    const queryKey = activeListQueryKey;
-    setLoading(true);
-    setLoadError("");
-    try {
-      const r = await api.listVideos({
-        page,
-        size: pageSize,
-        keyword: searchKeyword,
-        driveId: sourceDriveId,
-        crawlerId: sourceCrawlerId,
-        sourceKind,
-        ...appliedFilters,
-      });
-      if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
-      setList(r.items ?? []);
-      setTotal(r.total ?? 0);
-      setDisplayedPage(page);
-      setResolvedListQueryKey(queryKey);
-    } catch (e) {
-      if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
-      const message = e instanceof Error ? e.message : "加载失败";
-      setLoadError(message);
-      setResolvedListQueryKey(queryKey);
-      show(message, "error");
-    } finally {
-      if (requestId === listRequestIdRef.current && queryKey === activeListQueryKeyRef.current) {
-        setLoading(false);
-      }
-    }
-  }
-
-  async function refreshListOnly() {
-    const queryKey = activeListQueryKey;
-    try {
-      const r = await api.listVideos({
-        page,
-        size: pageSize,
-        keyword: searchKeyword,
-        driveId: sourceDriveId,
-        crawlerId: sourceCrawlerId,
-        sourceKind,
-        ...appliedFilters,
-      });
-      if (queryKey !== activeListQueryKeyRef.current) return;
-      setList(r.items ?? []);
-      setTotal(r.total ?? 0);
-    } catch {
-      // Polling is only used to clear optimistic preview-generation state.
-    }
-  }
-
   const trackedRegenCount = Object.keys(regenPreviewById).length;
-  const hasGeneratingPreview = list.some((v) => v.previewStatus === REGEN_PREVIEW_STATUS);
-
-  useAdminRouteRevalidation(() => {
-    void refreshListOnly();
-    void api.listTags().then((tagList) => setAvailableTags(tagList ?? [])).catch(() => undefined);
+  const videos = useAdminResource<api.AdminVideoList | null>((signal) => api.listVideos({
+    page, size: pageSize, keyword: searchKeyword, driveId: sourceDriveId,
+    crawlerId: sourceCrawlerId, sourceKind, ...appliedFilters,
+  }, signal), {
+    queryKey: activeListQueryKey, active: routeActive, initialData: null, onUnauthorized: invalidateSession,
+    intervalMs: (data) => trackedRegenCount > 0 || data?.items?.some((video) => video.previewStatus === REGEN_PREVIEW_STATUS)
+      ? REGEN_PREVIEW_POLL_INTERVAL_MS : null,
   });
-
-  useEffect(() => {
-    refresh();
-  }, [page, searchKeyword, pageSize, sourceDriveId, sourceCrawlerId, sourceKind, appliedFilters]);
-
-  useEffect(() => {
-    let active = true;
-    void api.listTags()
-      .then((tagList) => {
-        if (active) setAvailableTags(tagList ?? []);
-      })
-      .catch((e) => {
-        if (active) show(e instanceof Error ? e.message : "标签加载失败", "error");
-      });
-    return () => {
-      active = false;
-    };
-  }, [show]);
+  const tagResource = useAdminResource(api.listTags, {
+    queryKey: "video-tags", active: routeActive, intervalMs: null, initialData: [], onUnauthorized: invalidateSession,
+  });
+  const list = videos.data?.items ?? [];
+  const previousResult = useRef<{ data: api.AdminVideoList; page: number } | null>(null);
+  if (videos.data) previousResult.current = { data: videos.data, page };
+  const visibleResult = previousResult.current;
+  const total = visibleResult?.data.total ?? 0;
+  const loading = videos.loading;
+  const loadError = videos.ready ? "" : videos.error;
+  const refresh = videos.invalidate;
+  const availableTags = tagResource.data;
+  const displayedPage = visibleResult?.page ?? null;
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -524,26 +408,7 @@ function CurrentVideosTab({
   }, [pageSize, setPage]);
 
   useEffect(() => {
-    if (!routeActive || (trackedRegenCount === 0 && !hasGeneratingPreview)) return;
-    const timer = window.setInterval(() => {
-      refreshListOnly();
-    }, REGEN_PREVIEW_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [
-    trackedRegenCount,
-    hasGeneratingPreview,
-    page,
-    pageSize,
-    searchKeyword,
-    sourceDriveId,
-    sourceCrawlerId,
-    sourceKind,
-    appliedFilters,
-    routeActive,
-  ]);
-
-  useEffect(() => {
-    if (trackedRegenCount === 0) return;
+    if (trackedRegenCount === 0 || !videos.ready) return;
     const now = Date.now();
     setRegenPreviewById((current) => {
       const next = { ...current };
@@ -559,17 +424,17 @@ function CurrentVideosTab({
       }
       return changed ? next : current;
     });
-  }, [list, trackedRegenCount]);
+  }, [list, trackedRegenCount, videos.ready]);
 
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
   driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "本地存储");
 
-  const listItems = list;
+  const listItems = visibleResult?.data.items ?? [];
   const editingVideo = editing ? (listItems.find((v) => v.id === editing.id) ?? editing) : null;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const listQueryPending = loading || resolvedListQueryKey !== activeListQueryKey;
-  const listQuerySettled = !loading && resolvedListQueryKey === activeListQueryKey;
-  const showInitialLoading = displayedPage === null && !loadError && listQueryPending;
+  const listQueryPending = loading;
+  const listQuerySettled = videos.ready && !videos.refreshing && !videos.failure;
+  const showInitialLoading = (displayedPage === null || listItems.length === 0) && !loadError && listQueryPending;
   useEffect(() => {
     if (listQuerySettled && page > totalPages) setPage(totalPages);
   }, [listQuerySettled, page, totalPages, setPage]);
@@ -588,6 +453,7 @@ function CurrentVideosTab({
     try {
       await api.regenPreview(v.id);
       trackRegeneratingPreview([v]);
+      void videos.invalidate();
       show("已触发预览视频重生", "success");
     } catch (e) {
       show(e instanceof Error ? e.message : "触发失败", "error");
@@ -633,10 +499,9 @@ function CurrentVideosTab({
         return next;
       });
       show(result.deletedSource ? "已删除视频，并清理源文件" : "已删除视频", "success");
-      if (listItems.length === 1 && page > 1) {
+      void videos.invalidate();
+      if (videos.ready && listItems.length === 1 && page > 1) {
         setPage((p) => Math.max(1, p - 1));
-      } else {
-        refresh();
       }
     } catch (e) {
       show(e instanceof Error ? e.message : "删除失败", "error");
@@ -677,11 +542,10 @@ function CurrentVideosTab({
       setBatchDeleteOpen(false);
       setBatchDeleteSource(false);
       const currentPageEmptied =
-        listItems.length > 0 && listItems.every((video) => deletedIds.has(video.id));
+        videos.ready && listItems.length > 0 && listItems.every((video) => deletedIds.has(video.id));
+      void videos.invalidate();
       if (currentPageEmptied && page > 1) {
         setPage((p) => Math.max(1, p - 1));
-      } else {
-        refresh();
       }
     } finally {
       setBatchDeleting(false);
@@ -698,6 +562,7 @@ function CurrentVideosTab({
   };
 
   const selectPageVideos = () => {
+    if (listQueryPending) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       listItems.forEach((video) => next.add(video.id));
@@ -744,6 +609,15 @@ function CurrentVideosTab({
 
   return (
     <div className={`admin-videos-current${selectedIds.size > 0 ? " has-bulk-actions" : ""}`}>
+      {[
+        { title: "视频列表", resource: videos, visible: videos.ready },
+        { title: "标签", resource: tagResource, visible: true },
+      ].map(({ title, resource, visible }) => visible && resource.error && (
+        <div className="admin-detail-error" role="alert" key={title}>
+          {title}加载失败：{resource.error}
+          <button type="button" className="admin-btn" onClick={() => void resource.refresh()}>重试</button>
+        </div>
+      ))}
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--current">
         <SearchBox keyword={searchKeyword} onSearch={handleSearch} />
         <div className="admin-videos-filter__current-actions" data-admin-floating-actions>
@@ -799,7 +673,7 @@ function CurrentVideosTab({
               type="button"
               className="admin-btn admin-videos-bulk-actions__btn"
               onClick={selectPageVideos}
-              disabled={listItems.length === 0 || allPageSelected}
+              disabled={listQueryPending || listItems.length === 0 || allPageSelected}
             >
               全选本页
             </button>
@@ -826,7 +700,7 @@ function CurrentVideosTab({
       {showInitialLoading ? (
         <VideoCardGridLoadingState />
       ) : loadError ? (
-        <ErrorState message={loadError} onRetry={refresh} />
+        <ErrorState message={loadError} onRetry={videos.refresh} />
       ) : listItems.length === 0 ? (
         <AdminEmptyVisual
           variant={hasActiveSearch ? "no-results" : "empty"}
@@ -838,6 +712,7 @@ function CurrentVideosTab({
           className={`admin-videos-results${listQueryPending ? " is-page-loading" : ""}`}
           aria-label="视频列表结果"
           aria-busy={listQueryPending || undefined}
+          {...(listQueryPending ? { inert: "" } : {})}
         >
           <div
             className="admin-video-card-grid admin-videos-results__content"
@@ -940,22 +815,16 @@ function BlacklistTab({
   page: number;
   setPage: PageSetter;
 }) {
-  const [list, setList] = useState<api.AdminDeletedVideo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const routeActive = useAdminRouteActive();
+  const { invalidateSession } = useAuth();
   const [searchKeyword, setSearchKeyword] = useState("");
-  const [total, setTotal] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [removeTarget, setRemoveTarget] = useState<api.AdminDeletedVideo | null>(null);
   const [removing, setRemoving] = useState(false);
-  const [sourceDeleteStatus, setSourceDeleteStatus] = useState<api.BlacklistSourceDeleteStatus | null>(null);
   const [sourceDeleteOpen, setSourceDeleteOpen] = useState(false);
   const [sourceDeleteTarget, setSourceDeleteTarget] = useState<api.AdminDeletedVideo | null>(null);
   const [batchSourceDeleteOpen, setBatchSourceDeleteOpen] = useState(false);
   const [sourceDeleteStarting, setSourceDeleteStarting] = useState(false);
-  const [displayedPage, setDisplayedPage] = useState<number | null>(null);
-  const [resolvedListQueryKey, setResolvedListQueryKey] = useState("");
-  const listRequestIdRef = useRef(0);
   const pageSize = useVideosPageSize(
     DESKTOP_BLACKLIST_PAGE_SIZE,
     MOBILE_BLACKLIST_PAGE_SIZE
@@ -963,94 +832,39 @@ function BlacklistTab({
   const previousPageSizeRef = useRef(pageSize);
   const { show } = useToast();
   const activeListQueryKey = JSON.stringify([page, pageSize, searchKeyword]);
-  const activeListQueryKeyRef = useRef(activeListQueryKey);
-  activeListQueryKeyRef.current = activeListQueryKey;
-
-  async function refresh(silent = false) {
-    const requestId = ++listRequestIdRef.current;
-    const queryKey = activeListQueryKey;
-    if (!silent) {
-      setLoading(true);
-      setLoadError("");
-    }
-    try {
-      const r = await api.listBlacklist({ page, size: pageSize, keyword: searchKeyword });
-      if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
-      setList(r.items ?? []);
-      setTotal(r.total ?? 0);
-      setDisplayedPage(page);
-      setResolvedListQueryKey(queryKey);
-      setLoadError("");
-    } catch (e) {
-      if (requestId !== listRequestIdRef.current || queryKey !== activeListQueryKeyRef.current) return;
-      if (!silent) {
-        const message = e instanceof Error ? e.message : "加载失败";
-        setLoadError(message);
-        setResolvedListQueryKey(queryKey);
-        show(message, "error");
-      }
-    } finally {
-      if (
-        !silent &&
-        requestId === listRequestIdRef.current &&
-        queryKey === activeListQueryKeyRef.current
-      ) {
-        setLoading(false);
-      }
-    }
-  }
-
-  useAdminRouteRevalidation(() => {
-    void refresh(true);
+  const blacklist = useAdminResource<api.AdminBlacklistList | null>(
+    (signal) => api.listBlacklist({ page, size: pageSize, keyword: searchKeyword }, signal),
+    { queryKey: activeListQueryKey, active: routeActive, intervalMs: null, initialData: null, onUnauthorized: invalidateSession });
+  const sourceDelete = useAdminResource<api.BlacklistSourceDeleteStatus | null>(api.getBlacklistSourceDeleteStatus, {
+    queryKey: "blacklist-source-delete", active: routeActive, initialData: null, onUnauthorized: invalidateSession,
+    intervalMs: (status) => status?.running ? 2000 : null,
   });
+  const { data: sourceDeleteStatus, setData: setSourceDeleteStatus } = sourceDelete;
+  const trackedSourceDelete = useRef<string | null>(null);
+  const previousResult = useRef<{ data: api.AdminBlacklistList; page: number } | null>(null);
+  if (blacklist.data) previousResult.current = { data: blacklist.data, page };
+  const visibleResult = previousResult.current;
+  const list = visibleResult?.data.items ?? [];
+  const total = visibleResult?.data.total ?? 0;
+  const loading = blacklist.loading;
+  const loadError = blacklist.ready ? "" : blacklist.error;
+  const refresh = blacklist.invalidate;
+  const displayedPage = visibleResult?.page ?? null;
 
   useEffect(() => {
+    const status = sourceDeleteStatus;
+    if (!status || !routeActive || document.hidden || sourceDelete.refreshing) return;
+    const run = status.startedAt ?? "active";
+    if (status.running) { trackedSourceDelete.current = run; return; }
+    if (trackedSourceDelete.current !== run) return;
+    trackedSourceDelete.current = null;
+    const summary = [`成功 ${status.deleted}`];
+    if (status.skipped > 0) summary.push(`跳过 ${status.skipped}`);
+    if (status.failed > 0) summary.push(`失败 ${status.failed}`);
+    show(`源文件删除完成：${summary.join("，")}`, status.failed > 0 ? "info" : "success");
+    setSelectedIds(new Set());
     void refresh();
-  }, [page, searchKeyword, pageSize]);
-
-  useEffect(() => {
-    let active = true;
-    void api.getBlacklistSourceDeleteStatus()
-      .then((status) => {
-        if (active) setSourceDeleteStatus(status);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!sourceDeleteStatus?.running) return;
-    let active = true;
-    let timer = 0;
-
-    const poll = async () => {
-      try {
-        const status = await api.getBlacklistSourceDeleteStatus();
-        if (!active) return;
-        setSourceDeleteStatus(status);
-        if (status.running) {
-          timer = window.setTimeout(poll, 2000);
-          return;
-        }
-        const summary = [`成功 ${status.deleted}`];
-        if (status.skipped > 0) summary.push(`跳过 ${status.skipped}`);
-        if (status.failed > 0) summary.push(`失败 ${status.failed}`);
-        show(`源文件删除完成：${summary.join("，")}`, status.failed > 0 ? "info" : "success");
-        setSelectedIds(new Set());
-        void refresh();
-      } catch {
-        if (active) timer = window.setTimeout(poll, 2000);
-      }
-    };
-
-    timer = window.setTimeout(poll, 1000);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [sourceDeleteStatus?.running]);
+  }, [sourceDeleteStatus, sourceDelete.refreshing, routeActive, refresh, show]);
 
   useEffect(() => {
     if (previousPageSizeRef.current === pageSize) return;
@@ -1065,9 +879,9 @@ function BlacklistTab({
   const driveNameMap = new Map(drives.map((d) => [d.id, d.name || d.id]));
   driveNameMap.set(LOCAL_UPLOAD_SOURCE_ID, "本地存储");
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const listQueryPending = loading || resolvedListQueryKey !== activeListQueryKey;
-  const listQuerySettled = !loading && resolvedListQueryKey === activeListQueryKey;
-  const showInitialLoading = displayedPage === null && !loadError && listQueryPending;
+  const listQueryPending = loading;
+  const listQuerySettled = blacklist.ready && !blacklist.refreshing && !blacklist.failure;
+  const showInitialLoading = (displayedPage === null || list.length === 0) && !loadError && listQueryPending;
   useEffect(() => {
     if (listQuerySettled && page > totalPages) setPage(totalPages);
   }, [listQuerySettled, page, totalPages, setPage]);
@@ -1099,10 +913,9 @@ function BlacklistTab({
             : "已取消拉黑，将在下次手动或定时扫盘时生效",
         "success"
       );
-      if (list.length === 1 && page > 1) {
+      void blacklist.invalidate();
+      if (blacklist.ready && list.length === 1 && page > 1) {
         setPage((p) => Math.max(1, p - 1));
-      } else {
-        refresh();
       }
     } catch (e) {
       show(e instanceof Error ? e.message : "操作失败", "error");
@@ -1185,6 +998,7 @@ function BlacklistTab({
   };
 
   const selectPageBlacklist = () => {
+    if (listQueryPending) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       selectableItems.forEach((video) => next.add(video.id));
@@ -1199,6 +1013,12 @@ function BlacklistTab({
 
   return (
     <div className={`admin-videos-blacklist${selectedIds.size > 0 ? " has-bulk-actions" : ""}`}>
+      {[blacklist, sourceDelete].map((resource, index) => resource.error && (resource.ready || index === 1) && (
+        <div className="admin-detail-error" role="alert" key={index}>
+          数据更新失败：{resource.error}
+          <button type="button" className="admin-btn" onClick={() => void resource.refresh()}>重试</button>
+        </div>
+      ))}
       <div className="admin-page__actions admin-videos-filter admin-videos-filter--blacklist">
         <SearchBox keyword={searchKeyword} onSearch={handleSearch} />
         {hasBlacklistActions && (
@@ -1235,7 +1055,7 @@ function BlacklistTab({
               type="button"
               className="admin-btn admin-videos-bulk-actions__btn"
               onClick={selectPageBlacklist}
-              disabled={sourceDeleteRunning || selectableItems.length === 0 || allPageSelected}
+              disabled={listQueryPending || sourceDeleteRunning || selectableItems.length === 0 || allPageSelected}
             >
               全选本页
             </button>
@@ -1260,7 +1080,7 @@ function BlacklistTab({
       )}
 
       {showInitialLoading ? null : loadError ? (
-        <ErrorState message={loadError} onRetry={refresh} />
+        <ErrorState message={loadError} onRetry={blacklist.refresh} />
       ) : list.length === 0 ? (
         <AdminEmptyVisual
           variant={hasActiveSearch ? "no-results" : "empty"}
@@ -1272,6 +1092,7 @@ function BlacklistTab({
           className={`admin-videos-results${listQueryPending ? " is-page-loading" : ""}`}
           aria-label="拉黑视频列表结果"
           aria-busy={listQueryPending || undefined}
+          {...(listQueryPending ? { inert: "" } : {})}
         >
           <table className="admin-table admin-table--static-rows admin-blacklist-table admin-videos-results__content">
             <tbody>

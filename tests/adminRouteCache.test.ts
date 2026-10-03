@@ -13,6 +13,9 @@ const appSource = source("App.tsx");
 const layoutSource = source("admin/AdminLayout.tsx");
 const modalSource = source("admin/Modal.tsx");
 const drivesSource = source("admin/DrivesPage.tsx");
+const driveListDataSource = source("admin/drive/useDriveListData.ts");
+const driveDetailDataSource = source("admin/drive/useDriveDetailData.ts");
+const adminResourceSource = source("admin/useAdminResource.ts");
 const crawlersSource = source("admin/CrawlersPage.tsx");
 const videosSource = source("admin/VideosPage.tsx");
 const tagsSource = source("admin/TagsPage.tsx");
@@ -42,18 +45,21 @@ test("retained pages revalidate silently when they become active again", () => {
   );
 
   for (const pageSource of [
-    drivesSource,
-    crawlersSource,
-    videosSource,
-    tagsSource,
-    usersSource,
     logsSource,
     settingsSource,
   ]) {
     assert.match(pageSource, /useAdminRouteRevalidation/);
   }
 
-  assert.match(backupSource, /if \(!routeActive\) return;[\s\S]*?refresh\(true\)/);
+  for (const pageSource of [videosSource, tagsSource, usersSource]) {
+    assert.match(pageSource, /useAdminResource/);
+    assert.match(pageSource, /active: routeActive/);
+  }
+
+  assert.match(crawlersSource, /useAdminResource[\s\S]*?active: routeActive/);
+  assert.match(backupSource, /const pollingActive = routeActive && !restoring/);
+  assert.match(backupSource, /active: pollingActive/);
+  assert.match(adminResourceSource, /document\.addEventListener\("visibilitychange", resume\)/);
   assert.match(
     settingsSource,
     /if \(!dirty\) void load\(true\)/
@@ -62,9 +68,12 @@ test("retained pages revalidate silently when they become active again", () => {
 });
 
 test("hidden pages suspend recurring and out-of-tree UI work", () => {
-  assert.match(drivesSource, /if \(!routeActive\) return;[\s\S]*?setInterval/);
-  assert.match(crawlersSource, /if \(!routeActive\) return;[\s\S]*?setInterval/);
-  assert.match(videosSource, /if \(!routeActive \|\| \(trackedRegenCount === 0/);
+  assert.match(drivesSource, /useDriveListData\(routeActive && !selectedDriveId\)/);
+  assert.match(driveListDataSource, /queryKey: "drives", active/);
+  assert.match(driveDetailDataSource, /if \(!driveId \|\| !routeActive \|\| !visible\) return/);
+  assert.match(adminResourceSource, /if \(!options\.active\) return/);
+  assert.match(adminResourceSource, /if \(document\.hidden\) resource\.pause\(\)/);
+  assert.match(videosSource, /active: routeActive/);
   assert.match(logsSource, /autoRefresh: autoRefresh && routeActive/);
   assert.match(logsSource, /const fullscreenActive = fullscreen && routeActive/);
   assert.match(modalSource, /const visible = open && routeActive/);

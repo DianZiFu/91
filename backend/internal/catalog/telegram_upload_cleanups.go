@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/video-site/backend/internal/driveevents"
 )
 
 // TelegramUploadCleanup owns a source left behind after a committed transfer.
@@ -24,7 +26,8 @@ type TelegramUploadCleanup struct {
 
 // MigrateTelegramVideoToDrive commits the new source and its cleanup obligation
 // together, so a crash cannot leave an untracked local copy.
-func (c *Catalog) MigrateTelegramVideoToDrive(ctx context.Context, videoID string, target VideoDriveMigration, cleanup TelegramUploadCleanup) error {
+func (c *Catalog) MigrateTelegramVideoToDrive(ctx context.Context, videoID string, target VideoDriveMigration, cleanup TelegramUploadCleanup) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	if cleanup.VideoID != videoID || cleanup.SourceDriveID != target.SourceDriveID || cleanup.SourceFileID != target.SourceFileID ||
 		(cleanup.SourceDriveID != "local-upload" && cleanup.SourceDriveID != TelegramLocalDriveID) ||
 		cleanup.SourceFileID == "" || filepath.Base(cleanup.SourceFileID) != cleanup.SourceFileID || strings.ContainsAny(cleanup.SourceFileID, "/\\\x00") ||

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/video-site/backend/internal/dedupe"
+	"github.com/video-site/backend/internal/driveevents"
 )
 
 var ErrDuplicatePlanStale = errors.New("catalog: duplicate plan is stale")
@@ -33,7 +34,7 @@ type DuplicateAssetCleanupJob struct {
 }
 
 type CrawlerSourceSeen struct {
- DiscoveryKey string
+	DiscoveryKey  string
 	Kind          string
 	DriveID       string
 	SourceID      string
@@ -54,7 +55,8 @@ type DuplicateVideoReplacement struct {
 // User state and durable references are merged into each canonical row before
 // duplicate rows are retired. Generated files are intentionally not touched
 // here; cleanup jobs are committed with the tombstones and processed later.
-func (c *Catalog) ApplyDuplicateVideoDeletions(ctx context.Context, deletions []DuplicateVideoDeletion) error {
+func (c *Catalog) ApplyDuplicateVideoDeletions(ctx context.Context, deletions []DuplicateVideoDeletion) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	if len(deletions) == 0 {
 		return nil
 	}
@@ -142,7 +144,8 @@ func (c *Catalog) ApplyDuplicateVideoDeletions(ctx context.Context, deletions []
 // tombstones the smaller row it supersedes. It is used by crawler ingress,
 // where deleting the old row before inserting the downloaded replacement
 // would otherwise leave the library without either video on failure.
-func (c *Catalog) ReplaceDuplicateVideo(ctx context.Context, replacement DuplicateVideoReplacement) error {
+func (c *Catalog) ReplaceDuplicateVideo(ctx context.Context, replacement DuplicateVideoReplacement) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	if replacement.NewVideo == nil {
 		return errors.New("catalog: duplicate replacement requires a new video")
 	}

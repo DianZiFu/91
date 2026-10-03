@@ -38,10 +38,11 @@ type Config struct {
 }
 
 type Worker struct {
-	Catalog   *catalog.Catalog
-	Drive     drives.Drive
-	Config    Config
-	TaskGuard func() func()
+	Catalog         *catalog.Catalog
+	Drive           drives.Drive
+	Config          Config
+	TaskGuard       func() func()
+	OnStatusChanged func(bool)
 
 	ch       chan *catalog.Video
 	queue    videoQueue
@@ -81,6 +82,7 @@ func NewWorker(cat *catalog.Catalog, drv drives.Drive, cfg Config) *Worker {
 }
 
 func (w *Worker) Enqueue(v *catalog.Video) bool {
+	defer w.notifyStatus(false)
 	if v == nil {
 		return false
 	}
@@ -97,6 +99,7 @@ func (w *Worker) Enqueue(v *catalog.Video) bool {
 }
 
 func (w *Worker) EnqueueBlocking(ctx context.Context, v *catalog.Video) bool {
+	defer w.notifyStatus(false)
 	if v == nil {
 		return false
 	}
@@ -192,7 +195,7 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 		}
 		defer release()
 	}
-	defer w.queue.release(v.ID)
+	defer func() { w.queue.release(v.ID); w.notifyStatus(true) }()
 	if err := ctx.Err(); err != nil {
 		return
 	}
@@ -211,6 +214,7 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 		return
 	}
 	w.activity.start(current)
+	w.notifyStatus(true)
 	defer w.activity.done()
 	sum, err := compute(ctx, w.Drive, current, w.Config, w.http)
 	release() // Provider cooldown must not occupy a global slot.
@@ -226,9 +230,11 @@ func (w *Worker) processQueued(ctx context.Context, v *catalog.Video) {
 			}
 			until := time.Now().Add(wait)
 			w.cooldown.set(until)
+			w.notifyStatus(true)
 			applog.Warn(ctx, fmt.Sprintf("Fingerprint rate limited; cooling down for %s", wait), err, applog.Fields{Stage: "compute"})
 			sleepContext(ctx, wait)
 			w.cooldown.clear(until)
+			w.notifyStatus(true)
 			return
 		}
 		applog.Error(ctx, "Fingerprint computation failed", err, applog.Fields{Stage: "compute"})
@@ -670,4 +676,10 @@ func (q *videoQueue) lengthExcluding(currentID string) int {
 		return 0
 	}
 	return n
+}
+
+func (w *Worker) notifyStatus(immediate bool) {
+	if w.OnStatusChanged != nil {
+		w.OnStatusChanged(immediate)
+	}
 }

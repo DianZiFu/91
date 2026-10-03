@@ -1,7 +1,5 @@
 import {
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type DragEvent,
@@ -38,75 +36,34 @@ import {
   type CrawlerDisplayStatus,
 } from "./crawlerStatus";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
-import {
-  useAdminRouteActive,
-  useAdminRouteRevalidation,
-} from "./AdminRouteCache";
+import { useAdminRouteActive } from "./AdminRouteCache";
+import { useAdminResource } from "./useAdminResource";
+import { useAuth } from "./AuthContext";
 
 const POLL_INTERVAL_MS = 5000;
 
 export function CrawlersPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const routeActive = useAdminRouteActive();
-  const [list, setList] = useState<api.AdminCrawler[]>([]);
-  const [uploadTargets, setUploadTargets] = useState<api.AdminDrive[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { invalidateSession } = useAuth();
+  const maintenance = useAdminResource<api.MaintenanceJobStatus | null>(api.getScanAllJobStatus,
+    { queryKey: "maintenance", active: routeActive, intervalMs: POLL_INTERVAL_MS, initialData: null, onUnauthorized: invalidateSession });
+  const maintenanceBusy = Boolean(maintenance.data?.running || maintenance.data?.queued);
+  const crawlers = useAdminResource(api.listCrawlers, {
+    queryKey: "crawlers", active: routeActive, initialData: [], onUnauthorized: invalidateSession,
+    intervalMs: (items) => maintenanceBusy || items.some(crawlerBusy) ? POLL_INTERVAL_MS : 15_000,
+  });
+  const drives = useAdminResource(api.listDrives, { queryKey: "crawler-upload-targets", active: routeActive, intervalMs: 15_000, initialData: [], onUnauthorized: invalidateSession });
+  const { data: list, setData: setList, loading, invalidate: refresh } = crawlers;
+  const uploadTargets = drives.data.filter((drive) => drive.canUpload);
   const [detailTargetId, setDetailTargetId] = useState("");
   const [pendingActions, setPendingActions] = useState<Record<string, CrawlerAction>>({});
   const pendingActionsRef = useRef<Record<string, CrawlerAction>>({});
-  const [maintenanceBusy, setMaintenanceBusy] = useState(false);
   // undefined = 编辑器关闭；null = 新建；其余 = 编辑已有爬虫
   const [editorTarget, setEditorTarget] = useState<api.AdminCrawler | null | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<api.AdminCrawler | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const refreshingRef = useRef<Promise<void> | null>(null);
   const { show } = useToast();
-
-  const refresh = useCallback(
-    async function refreshData(silent = false): Promise<void> {
-      if (refreshingRef.current) {
-        await refreshingRef.current;
-        return refreshData(silent);
-      }
-      const request = (async () => {
-        if (!silent) setLoading(true);
-        try {
-          const [data, drives, maintenance] = await Promise.all([
-            api.listCrawlers(), api.listDrives(), api.getScanAllJobStatus(),
-          ]);
-          setList(data);
-          setUploadTargets(drives.filter((d) => d.canUpload));
-          setMaintenanceBusy(maintenance.running || maintenance.queued);
-        } catch (e) {
-          if (!silent) show(e instanceof Error ? e.message : "加载爬虫失败", "error");
-        } finally {
-          if (!silent) setLoading(false);
-        }
-      })();
-      refreshingRef.current = request;
-      await request;
-      refreshingRef.current = null;
-    },
-    [show]
-  );
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useAdminRouteRevalidation(() => {
-    void refresh(true);
-  });
-
-  // 空闲时也刷新，以发现定时任务或其他页面发起的操作。
-  const anyBusy = useMemo(() => maintenanceBusy || list.some(crawlerBusy), [list, maintenanceBusy]);
-  useEffect(() => {
-    if (!routeActive) return;
-    const timer = window.setInterval(() => {
-      if (!document.hidden && !refreshingRef.current) refresh(true);
-    }, anyBusy ? POLL_INTERVAL_MS : 15000);
-    return () => window.clearInterval(timer);
-  }, [anyBusy, refresh, routeActive]);
 
   function beginAction(id: string, action: CrawlerAction) {
     if (pendingActionsRef.current[id]) return false;
@@ -147,7 +104,7 @@ export function CrawlersPage() {
     } catch (e) {
       show(e instanceof Error ? e.message : "触发失败", "error");
     } finally {
-      await refresh(true);
+      await refresh();
       finishAction(crawler.id);
     }
   }
@@ -173,7 +130,7 @@ export function CrawlersPage() {
     } catch (e) {
       show(e instanceof Error ? e.message : "触发上传失败", "error");
     } finally {
-      await refresh(true);
+      await refresh();
       finishAction(crawler.id);
     }
   }
@@ -189,7 +146,7 @@ export function CrawlersPage() {
     } catch (e) {
       show(e instanceof Error ? e.message : "停止失败", "error");
     } finally {
-      await refresh(true);
+      await refresh();
       finishAction(crawler.id);
     }
   }
@@ -205,7 +162,7 @@ export function CrawlersPage() {
       setList(prev => prev.map(item => item.id === crawler.id ? { ...item, paused: crawler.paused } : item));
       show(e instanceof Error ? e.message : "切换暂停状态失败", "error");
     } finally {
-      await refresh(true);
+      await refresh();
       finishAction(crawler.id);
     }
   }
@@ -222,7 +179,7 @@ export function CrawlersPage() {
       }
       setDeleteTarget(null);
       if (detailTargetId === deleteTarget.id) setDetailTargetId("");
-      await refresh(true);
+      await refresh();
     } catch (e) {
       show(e instanceof Error ? e.message : "删除失败", "error");
     } finally {
@@ -236,6 +193,16 @@ export function CrawlersPage() {
       ref={floatingActionPageRef}
       className="admin-page admin-page--with-floating-actions admin-crawlers-page"
     >
+      {[
+        { title: "爬虫列表", resource: crawlers },
+        { title: "上传目标", resource: drives },
+        { title: "维护状态", resource: maintenance },
+      ].map(({ title, resource }) => resource.error && (
+        <div className="admin-detail-error" role="alert" key={title}>
+          {title}更新失败：{resource.error}
+          <button type="button" className="admin-btn" onClick={() => void resource.refresh()}>重试</button>
+        </div>
+      ))}
       <div className="admin-crawler-console">
         <div
           className="admin-card admin-crawler-list"
@@ -243,7 +210,7 @@ export function CrawlersPage() {
         >
           {loading ? (
             <CrawlerListSkeleton />
-          ) : list.length === 0 ? (
+          ) : crawlers.error && list.length === 0 ? null : list.length === 0 ? (
             <AdminEmptyVisual
               variant="empty"
               text="暂无爬虫"
@@ -296,7 +263,7 @@ export function CrawlersPage() {
           onClose={() => setEditorTarget(undefined)}
           onSaved={() => {
             setEditorTarget(undefined);
-            refresh(true);
+            void refresh();
           }}
         />
       )}

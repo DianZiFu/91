@@ -15,6 +15,7 @@ import (
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/crawljob"
+	"github.com/video-site/backend/internal/driveevents"
 	"github.com/video-site/backend/internal/drives"
 	"github.com/video-site/backend/internal/drives/googledrive"
 	"github.com/video-site/backend/internal/drives/guangyapan"
@@ -1215,6 +1216,10 @@ func (a *App) newDriveGenerationWorkers(drv drives.Drive) (*preview.Worker, *pre
 	fingerprintCfg.Limiter = fingerprintLimiter
 	fingerprintWorker := fingerprint.NewWorker(a.cat, drv, fingerprintCfg)
 	driveID := drv.ID()
+	notifyStatus := func(immediate bool) { a.notifyDriveRuntime(driveID, immediate) }
+	previewWorker.OnStatusChanged = notifyStatus
+	thumbWorker.OnStatusChanged = notifyStatus
+	fingerprintWorker.OnStatusChanged = notifyStatus
 	gate := a.driveOperationGate(driveID)
 	generation := gate.currentGeneration()
 	previewWorker.TaskGuard = func() func() {
@@ -1547,7 +1552,7 @@ func (a *App) beginDriveScanOrCrawl(driveID string) bool {
 		return false
 	}
 	a.scanQueueMu.Lock()
-	defer a.scanQueueMu.Unlock()
+	defer func() { a.scanQueueMu.Unlock(); a.notifyDriveRuntime(driveID, true) }()
 	if a.scanQueued == nil {
 		a.scanQueued = make(map[string]bool)
 	}
@@ -1567,6 +1572,9 @@ func (a *App) endDriveScanOrCrawl(driveID string) {
 	delete(a.scanQueued, driveID)
 	delete(a.scanProgress, driveID)
 	a.scanQueueMu.Unlock()
+	if a.cat != nil {
+		a.cat.DriveEvents().Notify(driveID, true, driveevents.ActivityChanged, driveevents.MediaChanged)
+	}
 }
 
 func (a *App) updateDriveScanProgress(driveID string, scanned, added int) {
@@ -1585,6 +1593,7 @@ func (a *App) updateDriveScanProgress(driveID string, scanned, added int) {
 		a.scanProgress[driveID] = progress
 	}
 	a.scanQueueMu.Unlock()
+	a.notifyDriveRuntime(driveID, false)
 }
 
 func (a *App) updateDriveScanCooldown(driveID string, until time.Time) {
@@ -1602,6 +1611,7 @@ func (a *App) updateDriveScanCooldown(driveID string, until time.Time) {
 		a.scanProgress[driveID] = progress
 	}
 	a.scanQueueMu.Unlock()
+	a.notifyDriveRuntime(driveID, true)
 }
 
 func (a *App) driveHasActiveWork(driveID string) bool {

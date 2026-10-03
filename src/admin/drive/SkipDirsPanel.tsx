@@ -26,7 +26,7 @@ function dirIdsKey(ids: Iterable<string>): string {
 
 type SkipDirsPanelProps = {
   drive: api.AdminDrive;
-  onSaved: (saved: { id: string; skipDirIds: string[] }) => void;
+  onSaved: (saved: { id: string; skipDirIds: string[]; snapshot?: api.DriveSnapshot<"config"> }) => void;
 };
 
 export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
@@ -117,7 +117,7 @@ export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
       retryAttemptRef.current = 0;
       failureToastShownRef.current = false;
       if (mountedRef.current) {
-        onSavedRef.current({ id: driveId, skipDirIds: savedIds });
+        onSavedRef.current({ id: driveId, skipDirIds: savedIds, snapshot: response.snapshot });
       }
 
       const currentKey = dirIdsKey(selectedRef.current);
@@ -267,7 +267,7 @@ export function SkipDirsPanel({ drive, onSaved }: SkipDirsPanelProps) {
 
       <div className="admin-detail-tree-container">
         <DirTreeNode
-          key={drive.id}
+          key={`${drive.id}:${drive.kind}:${drive.rootId}`}
           driveId={drive.id}
           id=""
           name={drive.name || "存储"}

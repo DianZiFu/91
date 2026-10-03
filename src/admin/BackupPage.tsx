@@ -26,6 +26,7 @@ import { Modal } from "./Modal";
 import { useToast } from "@/components/ToastContext";
 import { useAdminRouteActive } from "./AdminRouteCache";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
+import { useAdminResource } from "./useAdminResource";
 
 const RESUME_KEY = "video-site-91-backup-upload-v1";
 const RESTORE_CONFIRMATION_GRACE_MS = 30_000;
@@ -307,13 +308,9 @@ export function BackupPage() {
   const routeActive = useAdminRouteActive();
   const { invalidateSession } = useAuth();
   const { show } = useToast();
-  const [data, setData] = useState<api.BackupList | null>(null);
-  const [transfers, setTransfers] = useState<api.BackupTransferJob[]>([]);
-  const [receiveTransfers, setReceiveTransfers] = useState<api.BackupReceiveTransfer[]>([]);
   const [cancelingReceiveIds, setCancelingReceiveIds] = useState<Set<string>>(
     () => new Set()
   );
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [backupSelection, setBackupSelection] = useState<api.BackupSelection>(
@@ -347,33 +344,16 @@ export function BackupPage() {
   const pauseRequested = useRef(false);
   const restoreConfirmationStartedAt = useRef<number | null>(null);
 
-  const refresh = async (silent = false) => {
-    try {
-      const next = await api.listBackups();
-      setData(next);
-      try {
-        const [nextTransfers, nextReceives] = await Promise.all([
-          api.listBackupTransfers(),
-          api.listBackupReceiveTransfers(),
-        ]);
-        setTransfers(nextTransfers);
-        setReceiveTransfers(nextReceives);
-      } catch (error) {
-        if (!silent) throw error;
-      }
-    } catch (error) {
-      if (!silent) show(error instanceof Error ? error.message : "加载备份列表失败", "error");
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!routeActive) return;
-    void refresh();
-    const timer = window.setInterval(() => void refresh(true), 2000);
-    return () => window.clearInterval(timer);
-  }, [routeActive]);
+  const pollingActive = routeActive && !restoring;
+  const backups = useAdminResource<api.BackupList | null>(api.listBackups,
+    { queryKey: "backups", active: pollingActive, intervalMs: restoreSubmitting ? 500 : 2000, initialData: null, onUnauthorized: invalidateSession });
+  const outgoing = useAdminResource(api.listBackupTransfers,
+    { queryKey: "backup-transfers", active: pollingActive, intervalMs: 2000, initialData: [], onUnauthorized: invalidateSession });
+  const incoming = useAdminResource(api.listBackupReceiveTransfers,
+    { queryKey: "backup-receives", active: pollingActive, intervalMs: 2000, initialData: [], onUnauthorized: invalidateSession });
+  const { data, setData, loading } = backups;
+  const transfers = outgoing.data;
+  const { data: receiveTransfers, setData: setReceiveTransfers } = incoming;
 
   useEffect(() => {
     if (!resumeHint) return;
@@ -413,26 +393,6 @@ export function BackupPage() {
       window.clearTimeout(timer);
     };
   }, [finalizing, upload?.id]);
-
-  useEffect(() => {
-    if (!restoreSubmitting) return;
-    let active = true;
-    let timer = 0;
-    const poll = async () => {
-      try {
-        const next = await api.listBackups();
-        if (active) setData(next);
-      } catch {
-        // The restore request surfaces the authoritative error.
-      }
-      if (active) timer = window.setTimeout(poll, 500);
-    };
-    void poll();
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [restoreSubmitting]);
 
   useEffect(() => {
     if (!restoring) {
@@ -517,7 +477,7 @@ export function BackupPage() {
       await api.createBackup(backupSelection);
       setCreateOpen(false);
       show("备份任务已开始", "success");
-      await refresh(true);
+      await backups.invalidate();
     } catch (error) {
       show(error instanceof Error ? error.message : "创建备份失败", "error");
     } finally {
@@ -536,7 +496,7 @@ export function BackupPage() {
     try {
       await api.cancelBackup();
       show("正在取消备份任务", "info");
-      await refresh(true);
+      await backups.invalidate();
     } catch (error) {
       show(error instanceof Error ? error.message : "取消失败", "error");
     }
@@ -550,7 +510,7 @@ export function BackupPage() {
       show("备份已删除", "success");
       setExpandedBackupId((current) => (current === deleteTarget.id ? "" : current));
       setDeleteTarget(null);
-      await refresh(true);
+      await backups.invalidate();
     } catch (error) {
       show(error instanceof Error ? error.message : "删除备份失败", "error");
     } finally {
@@ -589,7 +549,7 @@ export function BackupPage() {
       setSendURL("");
       setSendToken("");
       show("服务器发送任务已创建", "success");
-      await refresh(true);
+      await outgoing.invalidate();
     } catch (error) {
       show(error instanceof Error ? error.message : "创建服务器发送任务失败", "error");
     } finally {
@@ -601,7 +561,7 @@ export function BackupPage() {
     try {
       await api.cancelBackupTransfer(id);
       show("正在取消服务器发送任务", "info");
-      await refresh(true);
+      await outgoing.invalidate();
     } catch (error) {
       show(error instanceof Error ? error.message : "取消服务器发送失败", "error");
     }
@@ -620,7 +580,7 @@ export function BackupPage() {
         )
       );
       show("服务器接收已取消，临时文件正在清理", "success");
-      await refresh(true);
+      await incoming.invalidate();
     } catch (error) {
       show(error instanceof Error ? error.message : "取消服务器接收失败", "error");
     } finally {
@@ -636,7 +596,7 @@ export function BackupPage() {
     try {
       await api.retryBackupTransfer(id);
       show("服务器发送任务已重新排队", "success");
-      await refresh(true);
+      await outgoing.invalidate();
     } catch (error) {
       show(error instanceof Error ? error.message : "重试服务器发送失败", "error");
     }
@@ -756,7 +716,7 @@ export function BackupPage() {
       setUpload(null);
       setFile(null);
       show(`迁移备份 ${completed.name} 已完成校验`, "success");
-      await refresh(true);
+      await backups.invalidate();
     } catch (error) {
       if (pauseRequested.current) return;
       show(error instanceof Error ? error.message : "迁移上传失败，可稍后重试", "error");
@@ -902,6 +862,16 @@ export function BackupPage() {
       className="admin-page admin-page--with-floating-actions backup-page"
       aria-busy={loading || undefined}
     >
+      {[
+        { title: "备份列表", resource: backups },
+        { title: "发送任务", resource: outgoing },
+        { title: "接收任务", resource: incoming },
+      ].map(({ title, resource }) => resource.error && !restoring && (
+        <div className="admin-detail-error" role="alert" key={title}>
+          {title}更新失败：{resource.error}
+          <button type="button" className="admin-btn" onClick={() => void resource.refresh()}>重试</button>
+        </div>
+      ))}
       <section className="backup-overview" aria-label="备份空间概览">
         <div className="backup-stat">
           <span>预计数据量</span>

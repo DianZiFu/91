@@ -1114,6 +1114,8 @@ type Worker struct {
 	// OnPreviewReady lets the application schedule dependent local-asset work
 	// without coupling this worker to a concrete thumbnail worker.
 	OnPreviewReady func(*catalog.Video)
+	// OnStatusChanged runs after a queue, activity or cooldown transition.
+	OnStatusChanged func(bool)
 	// TaskGuard holds application-level task admission for the complete provider
 	// operation. A nil release means this worker belongs to a retired runtime
 	// generation and the queued item must remain pending for its replacement.
@@ -1141,6 +1143,7 @@ func NewWorker(gen TeaserGenerator, cat *catalog.Catalog, drv drives.Drive) *Wor
 }
 
 func (w *Worker) Enqueue(v *catalog.Video) bool {
+	defer w.notifyStatus(false)
 	if v == nil || !w.enabled() {
 		return false
 	}
@@ -1157,6 +1160,7 @@ func (w *Worker) Enqueue(v *catalog.Video) bool {
 }
 
 func (w *Worker) EnqueueBlocking(ctx context.Context, v *catalog.Video) bool {
+	defer w.notifyStatus(false)
 	if v == nil || !w.enabled() {
 		return false
 	}
@@ -1177,10 +1181,11 @@ func (w *Worker) enabled() bool {
 }
 
 type ThumbWorker struct {
-	Gen       ThumbnailGenerator
-	Catalog   *catalog.Catalog
-	Drive     drives.Drive
-	TaskGuard func() func()
+	OnStatusChanged func(bool)
+	Gen             ThumbnailGenerator
+	Catalog         *catalog.Catalog
+	Drive           drives.Drive
+	TaskGuard       func() func()
 	// Limiter is shared by all thumbnail workers in the application.
 	Limiter *tasklimit.Limiter
 	ch      chan *catalog.Video
@@ -1409,6 +1414,7 @@ func NewThumbWorker(gen ThumbnailGenerator, cat *catalog.Catalog, drv drives.Dri
 }
 
 func (w *ThumbWorker) Enqueue(v *catalog.Video) bool {
+	defer w.notifyStatus(false)
 	if v == nil {
 		return false
 	}
@@ -1425,6 +1431,7 @@ func (w *ThumbWorker) Enqueue(v *catalog.Video) bool {
 }
 
 func (w *ThumbWorker) EnqueueBlocking(ctx context.Context, v *catalog.Video) bool {
+	defer w.notifyStatus(false)
 	if v == nil {
 		return false
 	}
@@ -1620,6 +1627,7 @@ func (w *Worker) prepareQueued(ctx context.Context, v *catalog.Video) func() {
 		if !prepared {
 			w.queue.release(v)
 			taskRelease()
+			w.notifyStatus(true)
 		}
 	}()
 	if w.Catalog == nil || v.ID == "" || ctx.Err() != nil || !w.enabled() {
@@ -1656,7 +1664,8 @@ func (w *Worker) prepareQueued(ctx context.Context, v *catalog.Video) func() {
 			return
 		}
 		w.activities.start(current)
-		defer w.activities.done(current.ID)
+		w.notifyStatus(true)
+		defer func() { w.activities.done(current.ID); w.notifyStatus(true) }()
 		retry := w.process(ctx, current)
 		release()
 		// Release before requeueing because videoQueue deduplicates reserved
@@ -1688,6 +1697,7 @@ func (w *ThumbWorker) processQueued(ctx context.Context, v *catalog.Video) {
 		if taskRelease != nil {
 			taskRelease()
 		}
+		w.notifyStatus(true)
 	}()
 
 	if w.TaskGuard != nil {
@@ -1701,6 +1711,7 @@ func (w *ThumbWorker) processQueued(ctx context.Context, v *catalog.Video) {
 	}
 	if release, ok := acquireGenerationSlot(ctx, w.Limiter, &w.rateLimit, "thumb", w.Drive); ok {
 		w.activity.start(v)
+		w.notifyStatus(true)
 		activityStarted = true
 		retry = w.process(ctx, v)
 		release()
@@ -1791,6 +1802,7 @@ func (w *Worker) pauseForRateLimit(err error, step, title string) bool {
 		}
 	}
 	until := w.rateLimit.pause(time.Now(), wait)
+	w.notifyStatus(true)
 	log.Printf("[preview] drive=%s rate-limited until=%s step=%s video=%s: %v", w.Drive.ID(), until.Format(time.RFC3339), step, title, err)
 	return true
 }
@@ -1803,6 +1815,7 @@ func (w *Worker) pauseForRecoverableError(err error, step, title string) bool {
 		return false
 	}
 	until := w.rateLimit.pause(time.Now(), w.RateLimitCooldown)
+	w.notifyStatus(true)
 	log.Printf("[preview] drive=%s transient media source error until=%s step=%s video=%s: %v", w.Drive.ID(), until.Format(time.RFC3339), step, title, err)
 	return true
 }
@@ -1830,6 +1843,7 @@ func (w *ThumbWorker) pauseForRateLimit(err error, step, title string) bool {
 		}
 	}
 	until := w.rateLimit.pause(time.Now(), wait)
+	w.notifyStatus(true)
 	log.Printf("[thumb] drive=%s rate-limited until=%s step=%s video=%s: %v", w.Drive.ID(), until.Format(time.RFC3339), step, title, err)
 	return true
 }
@@ -1861,6 +1875,7 @@ func (w *ThumbWorker) pauseForRecoverableError(ctx context.Context, v *catalog.V
 		return false
 	}
 	until := w.rateLimit.pause(time.Now(), w.RateLimitCooldown)
+	w.notifyStatus(true)
 	log.Printf("[thumb] drive=%s transient media source error until=%s failures=%d/%d step=%s video=%s: %v", w.Drive.ID(), until.Format(time.RFC3339), failures, defaultThumbTransientMediaMaxFailures, step, title, err)
 	return true
 }
@@ -2215,4 +2230,15 @@ func buildHeaders(h map[string][]string) string {
 		}
 	}
 	return sb.String()
+}
+
+func (w *Worker) notifyStatus(immediate bool) {
+	if w.OnStatusChanged != nil {
+		w.OnStatusChanged(immediate)
+	}
+}
+func (w *ThumbWorker) notifyStatus(immediate bool) {
+	if w.OnStatusChanged != nil {
+		w.OnStatusChanged(immediate)
+	}
 }

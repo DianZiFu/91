@@ -15,6 +15,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/video-site/backend/internal/driveevents"
 	"github.com/video-site/backend/internal/tagging"
 )
 
@@ -22,7 +23,8 @@ import (
 var schemaSQL string
 
 type Catalog struct {
-	db *sql.DB
+	db          *sql.DB
+	driveEvents driveevents.Hub
 
 	// matcher 缓存：按 settings 里的规则版本号失效。标签创建/修改/删除都会
 	// bump 版本；Matcher() 每次调用只多花一条单行 SELECT。
@@ -228,6 +230,7 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	if err != nil {
 		return err
 	}
+	c.driveEvents.Notify("", false, driveevents.MediaChanged)
 	if !existed {
 		if len(storedTags) > 0 {
 			return c.replaceManualVideoTags(ctx, v.ID, storedTags, true)
@@ -398,7 +401,8 @@ func nullableStatus(s string) string {
 	return s
 }
 
-func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status string) error {
+func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	now := time.Now().UnixMilli()
 	_, err := c.db.ExecContext(ctx,
 		`UPDATE videos
@@ -432,7 +436,8 @@ func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status st
 	return err
 }
 
-func (c *Catalog) HideVideo(ctx context.Context, id string) error {
+func (c *Catalog) HideVideo(ctx context.Context, id string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	res, err := c.db.ExecContext(ctx,
 		`UPDATE videos SET hidden = 1, updated_at = ? WHERE id = ?`,
 		time.Now().UnixMilli(), id)
@@ -491,7 +496,8 @@ type VideoDriveMigration struct {
 //
 // scanner 后续看到目标目录下相同 hash / file_name 的文件时，会通过
 // findDuplicate 命中本行，不会再插入重复行。
-func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, target VideoDriveMigration) error {
+func (c *Catalog) MigrateVideoToDrive(ctx context.Context, videoID string, target VideoDriveMigration) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	return migrateVideoToDrive(ctx, c.db, videoID, target)
 }
 
@@ -544,7 +550,8 @@ func migrateVideoToDrive(ctx context.Context, exec videoRowExecer, videoID strin
 
 // UpdateVideoFileIdentity atomically updates the storage filename and display
 // title after a local physical file has been renamed.
-func (c *Catalog) UpdateVideoFileIdentity(ctx context.Context, videoID, fileID, fileName, title string) error {
+func (c *Catalog) UpdateVideoFileIdentity(ctx context.Context, videoID, fileID, fileName, title string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	if strings.TrimSpace(videoID) == "" || strings.TrimSpace(fileID) == "" || strings.TrimSpace(fileName) == "" || strings.TrimSpace(title) == "" {
 		return fmt.Errorf("catalog: update video file identity: empty value")
 	}
@@ -798,6 +805,7 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 	if _, err := c.db.ExecContext(ctx, q, args...); err != nil {
 		return err
 	}
+	c.driveEvents.Notify("", false, driveevents.MediaChanged)
 	if p.TagsSet {
 		return c.SetAutoVideoTags(ctx, id, p.Tags)
 	}
@@ -962,7 +970,8 @@ func (c *Catalog) ListCanonicalLocalThumbnailReferences(ctx context.Context) ([]
 // references to the normal pending state. The URL and version guards preserve
 // a thumbnail that may have been refreshed by a concurrent worker after the
 // caller inspected the filesystem.
-func (c *Catalog) ResetMissingLocalThumbnails(ctx context.Context, references []LocalThumbnailReference) (int, error) {
+func (c *Catalog) ResetMissingLocalThumbnails(ctx context.Context, references []LocalThumbnailReference) (resultValue int, resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	if len(references) == 0 {
 		return 0, nil
 	}
@@ -1049,7 +1058,8 @@ func (c *Catalog) ListReadyLocalPreviewReferences(ctx context.Context) ([]LocalP
 // ResetMissingLocalPreviews atomically returns stale ready references to the
 // normal generation queue. The exact-path guard protects a teaser that may
 // have been regenerated after the application inspected the filesystem.
-func (c *Catalog) ResetMissingLocalPreviews(ctx context.Context, references []LocalPreviewReference) (int, error) {
+func (c *Catalog) ResetMissingLocalPreviews(ctx context.Context, references []LocalPreviewReference) (resultValue int, resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	if len(references) == 0 {
 		return 0, nil
 	}
@@ -1531,7 +1541,8 @@ func (c *Catalog) DeleteVideoWithTombstoneReason(ctx context.Context, id, reason
 // DeleteVideoWithTombstoneOptions records restore-relevant facts alongside the
 // tombstone. When SourceDeleted is true the source file is gone, so no tombstone
 // is retained. CanonicalVideoID links deduplicated rows to the retained video.
-func (c *Catalog) DeleteVideoWithTombstoneOptions(ctx context.Context, id string, options DeleteVideoTombstoneOptions) error {
+func (c *Catalog) DeleteVideoWithTombstoneOptions(ctx context.Context, id string, options DeleteVideoTombstoneOptions) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	if options.SourceDeleted {
 		return c.DeleteVideo(ctx, id)
 	}
@@ -1631,7 +1642,8 @@ ON CONFLICT(id) DO UPDATE SET
 	return nil
 }
 
-func (c *Catalog) DeleteVideo(ctx context.Context, id string) error {
+func (c *Catalog) DeleteVideo(ctx context.Context, id string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -2085,7 +2097,8 @@ func (c *Catalog) restoreDeletedVideoDirect(
 	ctx context.Context,
 	id string,
 	source DeletedVideoSourceInfo,
-) (DeletedVideoRestoreResult, error) {
+) (resultValue DeletedVideoRestoreResult, resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return DeletedVideoRestoreResult{}, err
@@ -2608,7 +2621,8 @@ func (c *Catalog) ListVideosByFingerprintStatus(ctx context.Context, driveID, st
 	return out, rows.Err()
 }
 
-func (c *Catalog) UpdateVideoFingerprint(ctx context.Context, id, sampledSHA256, status, errText string) error {
+func (c *Catalog) UpdateVideoFingerprint(ctx context.Context, id, sampledSHA256, status, errText string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.GenerationChanged)
 	sampledSHA256 = normalizeContentHash(sampledSHA256)
 	if status == "" {
 		status = "pending"
@@ -3210,8 +3224,15 @@ type DriveAssetStats struct {
 // deliberately includes duplicate rows, matching the former independent
 // queries.
 func (c *Catalog) CountDriveAssetStats(ctx context.Context) (DriveAssetStats, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT drive_id,
+	return c.countDriveAssetStats(ctx, "")
+}
+
+func (c *Catalog) CountDriveAssetStatsForDrive(ctx context.Context, driveID string) (DriveAssetStats, error) {
+	return c.countDriveAssetStats(ctx, driveID)
+}
+
+func (c *Catalog) countDriveAssetStats(ctx context.Context, driveID string) (DriveAssetStats, error) {
+	query := `SELECT drive_id,
 		        COUNT(CASE WHEN is_canonical = 1
 		                     AND COALESCE(preview_status, 'pending') = 'ready' THEN 1 END) AS teaser_ready_count,
 		        COUNT(CASE WHEN is_canonical = 1
@@ -3239,7 +3260,14 @@ func (c *Catalog) CountDriveAssetStats(ctx context.Context) (DriveAssetStats, er
 		                     AND COALESCE(fingerprint_status, 'pending') = 'failed' THEN 1 END) AS failed_count
 		   FROM videos
 		  WHERE COALESCE(hidden, 0) = 0
-		  GROUP BY drive_id`)
+		`
+	var args []any
+	if driveID != "" {
+		query += " AND drive_id = ?"
+		args = append(args, driveID)
+	}
+	query += " GROUP BY drive_id"
+	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return DriveAssetStats{}, err
 	}
@@ -3415,9 +3443,21 @@ type LocalMediaRef struct {
 }
 
 func (c *Catalog) ListLocalMediaRefs(ctx context.Context) ([]LocalMediaRef, error) {
-	rows, err := c.db.QueryContext(ctx,
-		`SELECT drive_id, id, COALESCE(preview_local, '')
-		   FROM videos`)
+	return c.listLocalMediaRefs(ctx, "")
+}
+
+func (c *Catalog) ListLocalMediaRefsForDrive(ctx context.Context, driveID string) ([]LocalMediaRef, error) {
+	return c.listLocalMediaRefs(ctx, driveID)
+}
+
+func (c *Catalog) listLocalMediaRefs(ctx context.Context, driveID string) ([]LocalMediaRef, error) {
+	query := `SELECT drive_id, id, COALESCE(preview_local, '') FROM videos`
+	var args []any
+	if driveID != "" {
+		query += " WHERE drive_id = ?"
+		args = append(args, driveID)
+	}
+	rows, err := c.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3531,7 +3571,8 @@ SELECT dup.id,
 // ClearGeneratedAssets clears DB references to generated local assets for a
 // video. The statuses go back to pending so the video can regenerate assets if
 // it later becomes the canonical item after its older duplicate is removed.
-func (c *Catalog) ClearGeneratedAssets(ctx context.Context, videoID string, clearPreview, clearThumbnail bool) error {
+func (c *Catalog) ClearGeneratedAssets(ctx context.Context, videoID string, clearPreview, clearThumbnail bool) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.MediaChanged)
 	parts := []string{}
 	args := []any{}
 	if clearPreview {
@@ -3624,7 +3665,9 @@ func (c *Catalog) UpsertDrivePatchingCredentialsPreservingSkipDirIDs(ctx context
 	})
 }
 
-func (c *Catalog) upsertDrive(ctx context.Context, d *Drive, options DriveUpsertOptions) error {
+func (c *Catalog) upsertDrive(ctx context.Context, d *Drive, options DriveUpsertOptions) (resultErr error) {
+	// A new/recreated drive also invalidates cached missing-resource results.
+	defer c.notifyDriveWrite(&resultErr, d.ID, driveevents.DriveChanged)
 	normalizeDriveRootFields(d)
 	cred, _ := json.Marshal(d.Credentials)
 	skipDirs := d.SkipDirIDs
@@ -3757,7 +3800,8 @@ func (c *Catalog) GetDrive(ctx context.Context, id string) (*Drive, error) {
 	return d, nil
 }
 
-func (c *Catalog) DeleteDrive(ctx context.Context, id string) error {
+func (c *Catalog) DeleteDrive(ctx context.Context, id string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, id, driveevents.DriveChanged)
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -3795,7 +3839,8 @@ func (c *Catalog) DeleteDrive(ctx context.Context, id string) error {
 // instead of UpsertDrive: a driver instance can hold an old Drive snapshot,
 // and replacing the full row from that snapshot can roll back independently
 // saved settings such as skip_dir_ids or root_id.
-func (c *Catalog) PatchDriveCredentials(ctx context.Context, id string, updates map[string]string) error {
+func (c *Catalog) PatchDriveCredentials(ctx context.Context, id string, updates map[string]string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, id, driveevents.DriveMetadataChanged)
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("catalog: patch drive credentials: empty id")
@@ -3841,7 +3886,12 @@ func (c *Catalog) PatchDriveCredentialsIfMatch(
 	ctx context.Context,
 	id, expectedKind, anchorKey, anchorValue string,
 	updates map[string]string,
-) (bool, error) {
+) (resultValue bool, resultErr error) {
+	defer func() {
+		if resultValue {
+			c.notifyDriveWrite(&resultErr, id, driveevents.DriveMetadataChanged)
+		}
+	}()
 	id = strings.TrimSpace(id)
 	expectedKind = strings.TrimSpace(expectedKind)
 	anchorKey = strings.TrimSpace(anchorKey)
@@ -3945,7 +3995,8 @@ UPDATE drives
 // server is already running. Playback and other runtime checks must not use
 // UpsertDrive here: doing so could overwrite credentials or drive settings with
 // a stale in-memory copy.
-func (c *Catalog) SetDriveRuntimeStatus(ctx context.Context, id, status, lastError string) error {
+func (c *Catalog) SetDriveRuntimeStatus(ctx context.Context, id, status, lastError string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, id, driveevents.DriveMetadataChanged)
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("catalog: set drive runtime status: empty id")
@@ -3973,7 +4024,8 @@ UPDATE drives
 // 调用方负责在保存前 trim/去重；这里只保证编码成 JSON 数组。
 //
 // drive 不存在时返回 sql.ErrNoRows，调用方可以照此返回 404。
-func (c *Catalog) SetDriveSkipDirIDs(ctx context.Context, id string, ids []string) error {
+func (c *Catalog) SetDriveSkipDirIDs(ctx context.Context, id string, ids []string) (resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, id, driveevents.DriveMetadataChanged)
 	if id == "" {
 		return fmt.Errorf("catalog: set drive skip_dir_ids: empty id")
 	}

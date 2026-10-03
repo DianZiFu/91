@@ -1,6 +1,7 @@
 package storageusage
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -41,6 +42,10 @@ func Compute(
 	driveIDs []string,
 	diskStats func(string) (DiskStats, error),
 ) (Usage, error) {
+	return ComputeContext(context.Background(), localDir, refs, driveIDs, diskStats)
+}
+
+func ComputeContext(ctx context.Context, localDir string, refs []VideoAssetRef, driveIDs []string, diskStats func(string) (DiskStats, error)) (Usage, error) {
 	localDir = strings.TrimSpace(localDir)
 	if localDir == "" {
 		return Usage{}, errors.New("local preview dir is not configured")
@@ -69,6 +74,9 @@ func Compute(
 
 	seen := make(map[string]bool)
 	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return Usage{}, err
+		}
 		if ref.ID == "" || ref.DriveID == "" || !allowed[ref.DriveID] {
 			continue
 		}

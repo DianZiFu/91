@@ -14,6 +14,7 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/drives/quark"
+	"github.com/video-site/backend/internal/driveview"
 	"github.com/video-site/backend/internal/mediaimport"
 	"github.com/video-site/backend/internal/scanjob"
 	"github.com/video-site/backend/internal/telegram"
@@ -45,12 +46,14 @@ type DriveConfigUpdateLease interface {
 }
 
 type AdminServer struct {
-	Telegram        *telegram.Integration
-	Imports         *mediaimport.Manager
-	Catalog         *catalog.Catalog
-	Auth            *auth.Authenticator
-	Backups         *backup.Manager
-	BackupTransfers *backuptransfer.Manager
+	Telegram           *telegram.Integration
+	Imports            *mediaimport.Manager
+	Catalog            *catalog.Catalog
+	driveSnapshotsOnce sync.Once
+	driveSnapshots     *driveview.Service
+	Auth               *auth.Authenticator
+	Backups            *backup.Manager
+	BackupTransfers    *backuptransfer.Manager
 	// Logs is the durable runtime log store exposed only through the
 	// administrator-authenticated routes below.
 	Logs *applog.Store
@@ -107,6 +110,7 @@ type AdminServer struct {
 	OnTagsChanged                func()
 	GetTagJobStatus              func() TagJobStatus
 	GetDriveGenerationStatuses   func() map[string]DriveGenerationStatuses
+	GetDriveGenerationStatus     func(string) DriveGenerationStatuses
 	GetPreviewGenerationVideoIDs func() map[string]bool
 	// Theme 读写（"dark" | "pink" | "sky"）
 	GetTheme func() string
@@ -253,6 +257,12 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Get("/drives/wopan/qr/{uuid}", a.handleWopanQRStatus)
 			r.Post("/drives/guangyapan/qr", a.handleGuangYaPanQRStart)
 			r.Get("/drives/guangyapan/qr/status", a.handleGuangYaPanQRStatus)
+			r.Get("/drives/{id}", a.handleDriveConfigSnapshot)
+			r.Get("/drives/{id}/config", a.handleDriveConfigSnapshot)
+			r.Get("/drives/{id}/runtime", a.handleDriveRuntimeSnapshot)
+			r.Get("/drives/{id}/stats", a.handleDriveStatsSnapshot)
+			r.Get("/drives/{id}/storage", a.handleDriveStorageSnapshot)
+			r.Get("/drives/{id}/events", a.handleDriveEvents)
 			r.Get("/drives/{id}/credentials", a.handleGetDriveCredentials)
 			r.Delete("/drives/{id}", a.handleDeleteDrive)
 			r.Post("/drives/{id}/rescan", a.handleRescan)

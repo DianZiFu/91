@@ -6,6 +6,12 @@ type TelegramAvailability = {
 let snapshot: TelegramAvailability = { enabled: null, error: "" };
 let revision = 0;
 const listeners = new Set<() => void>();
+const configListeners = new Set<(enabled: boolean) => void>();
+
+export function subscribeTelegramConfigChanges(listener: (enabled: boolean) => void) {
+  configListeners.add(listener);
+  return () => { configListeners.delete(listener); };
+}
 
 export const getTelegramAvailability = () => snapshot;
 
@@ -24,6 +30,7 @@ function publish(next: TelegramAvailability) {
 export function applyTelegramEnabled(enabled: boolean) {
   revision += 1;
   publish({ enabled, error: "" });
+  for (const listener of configListeners) listener(enabled);
 }
 
 export function resetTelegramAvailability() {

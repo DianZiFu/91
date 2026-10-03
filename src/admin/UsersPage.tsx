@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Ban,
   ChevronDown,
@@ -13,7 +13,9 @@ import { Modal } from "./Modal";
 import { ConfirmModal } from "./ConfirmModal";
 import { PasswordInput } from "./PasswordInput";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
-import { useAdminRouteRevalidation } from "./AdminRouteCache";
+import { useAdminRouteActive } from "./AdminRouteCache";
+import { useAdminResource } from "./useAdminResource";
+import { useAuth } from "./AuthContext";
 
 type Tab = "users" | "ips";
 const MIN_PASSWORD_LENGTH = 6;
@@ -21,9 +23,18 @@ const MIN_PASSWORD_LENGTH = 6;
 export function UsersPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLDivElement>();
   const [tab, setTab] = useState<Tab>("users");
-  const [users, setUsers] = useState<api.AdminUser[]>([]);
-  const [ips, setIps] = useState<api.BannedIP[]>([]);
-  const [loading, setLoading] = useState(true);
+  const routeActive = useAdminRouteActive();
+  const { invalidateSession } = useAuth();
+  const userResource = useAdminResource(api.listUsers, {
+    queryKey: "users", active: routeActive, intervalMs: null, initialData: [], onUnauthorized: invalidateSession,
+  });
+  const ipResource = useAdminResource(api.listBannedIPs, {
+    queryKey: "banned-ips", active: routeActive, intervalMs: null, initialData: [], onUnauthorized: invalidateSession,
+  });
+  const { data: users, invalidate: refreshUsers } = userResource;
+  const { data: ips, invalidate: refreshIPs } = ipResource;
+  const resource = tab === "users" ? userResource : ipResource;
+  const loading = resource.loading;
   const [showCreate, setShowCreate] = useState(false);
   const [createUsername, setCreateUsername] = useState("");
   const [createPassword, setCreatePassword] = useState("");
@@ -44,36 +55,6 @@ export function UsersPage() {
     resetPasswordValue.length > 0 && resetPasswordValue.length < MIN_PASSWORD_LENGTH
       ? `密码至少 ${MIN_PASSWORD_LENGTH} 位`
       : "";
-
-  async function refreshUsers(silent = false) {
-    try {
-      setUsers(await api.listUsers());
-    } catch (e) {
-      if (!silent) show(e instanceof Error ? e.message : "加载用户失败", "error");
-    }
-  }
-
-  async function refreshIPs(silent = false) {
-    try {
-      setIps(await api.listBannedIPs());
-    } catch (e) {
-      if (!silent) show(e instanceof Error ? e.message : "加载封禁IP失败", "error");
-    }
-  }
-
-  async function refresh(silent = false) {
-    if (!silent) setLoading(true);
-    await Promise.all([refreshUsers(silent), refreshIPs(silent)]);
-    if (!silent) setLoading(false);
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  useAdminRouteRevalidation(() => {
-    void refresh(true);
-  });
 
   async function handleCreate() {
     if (!createUsername.trim() || !createPassword || createPasswordError) return;
@@ -204,7 +185,13 @@ export function UsersPage() {
         </button>
       )}
 
-      {!loading && tab === "users" && (
+      {resource.error && (
+        <div className="admin-detail-error" role="alert">
+          {resource.error}
+          <button type="button" className="admin-btn" onClick={() => void resource.refresh()}>重试</button>
+        </div>
+      )}
+      {!loading && tab === "users" && resource.ready && (
         <div className="admin-table-wrap admin-users-table-wrap">
           <table className="admin-table admin-users-table">
             <thead>
@@ -278,7 +265,7 @@ export function UsersPage() {
         </div>
       )}
 
-      {!loading && tab === "ips" && (
+      {!loading && tab === "ips" && resource.ready && (
         <div className="admin-table-wrap admin-users-table-wrap">
           <table className="admin-table admin-banned-ips-table">
             <thead>

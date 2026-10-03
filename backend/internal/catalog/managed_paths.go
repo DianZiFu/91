@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/video-site/backend/internal/driveevents"
 	"github.com/video-site/backend/internal/localpath"
 	"github.com/video-site/backend/internal/mediaasset"
 )
@@ -18,7 +19,8 @@ import (
 // identities before any workers run. It never changes files. The conversion
 // is idempotent and also accepts a legacy database moved before its first run
 // with this version. New writes already use relative references.
-func (c *Catalog) MigrateManagedPaths(ctx context.Context, previewDir string) (int, error) {
+func (c *Catalog) MigrateManagedPaths(ctx context.Context, previewDir string) (resultValue int, resultErr error) {
+	defer c.notifyDriveWrite(&resultErr, "", driveevents.AssetPathsChanged)
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err

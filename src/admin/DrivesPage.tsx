@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   ArrowLeft,
@@ -23,7 +23,6 @@ import {
   driveKindAbbr,
   driveKindIconPath,
   emptyForm,
-  idleMaintenanceStatus,
   scanAllButtonText,
   maintenanceBusyText,
   usesRootDirectoryID,
@@ -50,10 +49,11 @@ import { ScanResultDetails } from "./drive/ScanResultDetails";
 import { isGenerationBusy } from "./drive/scanResults";
 import { AdminEmptyVisual } from "./AdminEmptyVisual";
 import { useAdminFloatingActionSpace } from "./useAdminFloatingActionSpace";
-import {
-  useAdminRouteActive,
-  useAdminRouteRevalidation,
-} from "./AdminRouteCache";
+import { useAdminRouteActive } from "./AdminRouteCache";
+import { useDriveDetailData } from "./drive/useDriveDetailData";
+import { useDriveListData } from "./drive/useDriveListData";
+import { useAuth } from "./AuthContext";
+import { useNavigate } from "react-router";
 
 const DRIVE_BUSY_MESSAGE = "当前存储有正在进行的任务，请稍后重试";
 const MAINTENANCE_BUSY_MESSAGE = "当前有全量扫描任务正在进行，请稍后重试";
@@ -73,12 +73,19 @@ function isDriveBusy(d: api.AdminDrive) {
 export function DrivesPage() {
   const floatingActionPageRef = useAdminFloatingActionSpace<HTMLElement>();
   const routeActive = useAdminRouteActive();
-  const [list, setList] = useState<api.AdminDrive[]>([]);
-  const [storage, setStorage] = useState<api.AdminDriveStorage | null>(null);
-  const [maintenanceStatus, setMaintenanceStatus] =
-    useState<api.MaintenanceJobStatus>(idleMaintenanceStatus);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedDriveId = searchParams.get("drive") || null;
+  const listData = useDriveListData(routeActive && !selectedDriveId);
+  const detail = useDriveDetailData(selectedDriveId, routeActive);
+  const { list, storage, setMaintenanceStatus } = listData;
+  const maintenanceStatus = (selectedDriveId ? detail.resources.runtime.data?.maintenanceStatus : null) ?? listData.maintenanceStatus;
+  const loading = selectedDriveId ? detail.loading : listData.loading;
+  const loadError = selectedDriveId ? detail.resources.config.error : listData.loadError;
+  const { invalidateSession } = useAuth();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (detail.unauthorized || listData.unauthorized) { invalidateSession(); navigate("/login", { replace: true }); }
+  }, [detail.unauthorized, listData.unauthorized, invalidateSession, navigate]);
   const [modalOpen, setModalOpen] = useState(false);
   const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<api.AdminDrive | null>(null);
@@ -93,15 +100,10 @@ export function DrivesPage() {
   const [regenFailedFingerprintId, setRegenFailedFingerprintId] = useState("");
   const [scanningAll, setScanningAll] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
-  const [trackingScanAll, setTrackingScanAll] = useState(false);
   const [scanningDriveIds, setScanningDriveIds] = useState<Record<string, boolean>>({});
   const scanningDriveIdsRef = useRef(new Set<string>());
   const [stoppingDriveId, setStoppingDriveId] = useState("");
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedDriveId = searchParams.get("drive") || null;
   const { show } = useToast();
-  const pollConnectionLost = useRef(false);
-  const driveListRequestVersion = useRef(0);
   const maintenanceBusy = scanningAll || maintenanceStatus.running || maintenanceStatus.queued;
   const formDirty = form.id
     ? !sameForm(form, initialForm)
@@ -123,88 +125,11 @@ export function DrivesPage() {
     }, options);
   }
 
-  async function refresh() {
-    const requestVersion = ++driveListRequestVersion.current;
-    setLoading(true);
-    setLoadError("");
-    try {
-      const [data, storageData, jobStatus] = await Promise.all([
-        api.listDrives(),
-        api.getDriveStorage(),
-        api.getScanAllJobStatus().catch(() => null),
-      ]);
-      if (requestVersion === driveListRequestVersion.current) {
-        setList(data ?? []);
-      }
-      setStorage(storageData);
-      if (jobStatus) setMaintenanceStatus(jobStatus);
-    } catch (e) {
-      if (requestVersion === driveListRequestVersion.current) {
-        const message = e instanceof Error ? e.message : "加载失败";
-        setLoadError(message);
-        show(message, "error");
-      }
-    } finally {
-      setLoading(false);
-    }
+  function refresh() {
+    return selectedDriveId ? detail.refresh() : listData.refresh();
   }
 
-  async function refreshDriveList() {
-    const requestVersion = ++driveListRequestVersion.current;
-    try {
-      const [data, jobStatus] = await Promise.all([
-        api.listDrives(),
-        api.getScanAllJobStatus().catch(() => null),
-      ]);
-      if (requestVersion !== driveListRequestVersion.current) return;
-      setList(data ?? []);
-      if (jobStatus) setMaintenanceStatus(jobStatus);
-      if (pollConnectionLost.current) {
-        pollConnectionLost.current = false;
-        show("连接已恢复，网盘数据已更新", "success");
-      }
-    } catch {
-      if (requestVersion !== driveListRequestVersion.current) return;
-      if (!pollConnectionLost.current) {
-        pollConnectionLost.current = true;
-        show("连接中断，网盘数据可能不是最新", "error");
-      }
-    }
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  useAdminRouteRevalidation(() => {
-    void refreshDriveList();
-  });
-
-  useEffect(() => {
-    if (!routeActive) return;
-    const timer = window.setInterval(() => {
-      if (!document.hidden && !modalOpen) {
-        refreshDriveList();
-      }
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [modalOpen, routeActive]);
-
-  useEffect(() => {
-    if (!routeActive || !trackingScanAll) return;
-    const timer = window.setInterval(async () => {
-      try {
-        const status = await api.getScanAllJobStatus();
-        setMaintenanceStatus(status);
-        if (status.running || (!status.queued && !status.running)) {
-          setTrackingScanAll(false);
-        }
-      } catch {
-        // The normal drive polling already reports connection loss.
-      }
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [routeActive, trackingScanAll]);
+  function refreshDriveList() { return refresh(); }
 
   function openCreate() {
     const nextForm = { ...emptyForm };
@@ -291,15 +216,15 @@ export function DrivesPage() {
         return;
       }
     }
-    const existing = list.find((x) => x.id === form.id);
-    const driveID = existing
+    const editing = Boolean(form.id);
+    const driveID = editing
       ? form.id
       : makeUniqueDriveId(form.kind, name, list);
     const editableCredentialKeys = credentialFields(form.kind).map((field) => field.key);
     // QR login writes a few values that do not have a standalone input field.
     if (form.kind === "p123") editableCredentialKeys.push("access_token");
     if (form.kind === "wopan") editableCredentialKeys.push("family_id");
-    const credentials = existing
+    const credentials = editing
       ? changedCredentialValues(
           form.creds,
           initialForm.creds,
@@ -326,6 +251,7 @@ export function DrivesPage() {
       } else {
         show("已保存并生效", "success");
       }
+      detail.accept(resp.snapshot);
       setModalOpen(false);
       setInitialForm(form);
       refresh();
@@ -368,6 +294,7 @@ export function DrivesPage() {
     setScanningDriveIds((prev) => ({ ...prev, [d.id]: true }));
     try {
       const resp = await api.rescan(d.id);
+      detail.accept(resp.snapshot);
       if (!resp.accepted) {
         if (resp.status) {
           setMaintenanceStatus(resp.status);
@@ -400,7 +327,6 @@ export function DrivesPage() {
       const resp = await api.runScanAllJob();
       setMaintenanceStatus(resp.status);
       if (resp.accepted) {
-        setTrackingScanAll(!resp.status.running);
         show("已触发全部网盘扫描，完成新视频处理后将执行视频去重", "success");
       } else {
         show(resp.message || MAINTENANCE_BUSY_MESSAGE, "info");
@@ -418,7 +344,6 @@ export function DrivesPage() {
     try {
       const resp = await api.stopAllTasks();
       setMaintenanceStatus(resp.status);
-      setTrackingScanAll(false);
       show(
         resp.stoppedDrives > 0
           ? `已停止 ${resp.stoppedDrives} 个网盘的当前任务`
@@ -438,6 +363,7 @@ export function DrivesPage() {
     setStoppingDriveId(d.id);
     try {
       const resp = await api.stopDriveTasks(d.id);
+      detail.accept(resp.snapshot);
       show(
         resp.stopped
           ? `已停止「${d.name || d.id}」的当前任务`
@@ -491,9 +417,7 @@ export function DrivesPage() {
     }
   }
 
-  const selectedDrive = useMemo(() => {
-    return selectedDriveId ? list.find((d) => d.id === selectedDriveId) : null;
-  }, [selectedDriveId, list]);
+  const selectedDrive = detail.drive;
 
   if (selectedDriveId && !selectedDrive) {
     if (loading) {
@@ -542,7 +466,7 @@ export function DrivesPage() {
   // --- Detail view ---
   if (selectedDriveId && selectedDrive) {
     const d = selectedDrive;
-    const driveStorage = storage?.drives[d.id];
+    const driveStorage = detail.storage;
 
     return (
       <section className="admin-page admin-drives-page">
@@ -560,6 +484,15 @@ export function DrivesPage() {
           </div>
         </header>
 
+        {detail.connection === "reconnecting" && (
+          <div className="admin-detail-error" role="status">连接中断，正在重连；当前显示上次更新的数据。</div>
+        )}
+        {detail.resources.config.error && (
+          <div className="admin-detail-error" role="status">
+            网盘信息更新失败：{detail.resources.config.error}
+            <button type="button" className="admin-btn" onClick={() => void detail.refresh(["config"])}>重试</button>
+          </div>
+        )}
         <div className="admin-drive-detail-layout">
           <div className="admin-drive-detail-layout__info">
             <div className="admin-detail-card">
@@ -638,6 +571,8 @@ export function DrivesPage() {
           <div className="admin-drive-detail-layout__status">
             <DriveGenerationPanel
               d={d}
+              runtimeLoading={!detail.resources.runtime.data && detail.resources.runtime.loading}
+              countsLoading={!detail.resources.stats.data}
               regenFailedId={regenFailedId}
               regenFailedThumbId={regenFailedThumbId}
               regenFailedFingerprintId={regenFailedFingerprintId}
@@ -649,7 +584,15 @@ export function DrivesPage() {
             <ScanResultDetails
               result={d.scanGenerationStatus?.result}
               scanning={isGenerationBusy(d.scanGenerationStatus?.state ?? "idle")}
+              loading={!detail.resources.runtime.data}
             />
+
+            {(["runtime", "stats"] as const).map((resource) => detail.resources[resource].error && (
+              <div className="admin-detail-error" role="status" key={resource}>
+                {resource === "runtime" ? "任务状态" : "资源数量"}更新失败：{detail.resources[resource].error}
+                <button type="button" className="admin-btn" onClick={() => void detail.refresh([resource])}>重试</button>
+              </div>
+            ))}
 
             <div className="admin-detail-card">
               <header className="admin-detail-card__title">
@@ -658,18 +601,24 @@ export function DrivesPage() {
                   <span>本地存储占用</span>
                 </div>
               </header>
-              <div className="admin-local-storage-metrics">
+              {detail.resources.storage.error && (
+                <div className="admin-detail-error" role="status">
+                  存储用量更新失败：{detail.resources.storage.error}
+                  <button type="button" className="admin-btn" onClick={() => void detail.refresh(["storage"])}>重试</button>
+                </div>
+              )}
+              <div className="admin-local-storage-metrics" aria-busy={detail.resources.storage.loading || undefined}>
                 <div className="admin-local-storage-metric">
                   <span>封面</span>
-                  <strong>{formatBytes(driveStorage?.thumbnailBytes ?? 0)}</strong>
+                  <strong>{driveStorage ? formatBytes(driveStorage.thumbnailBytes) : "—"}</strong>
                 </div>
                 <div className="admin-local-storage-metric">
                   <span>预览视频</span>
-                  <strong>{formatBytes(driveStorage?.teaserBytes ?? 0)}</strong>
+                  <strong>{driveStorage ? formatBytes(driveStorage.teaserBytes) : "—"}</strong>
                 </div>
                 <div className="admin-local-storage-metric">
                   <span>合计</span>
-                  <strong>{formatBytes(driveStorage?.totalBytes ?? 0)}</strong>
+                  <strong>{driveStorage ? formatBytes(driveStorage.totalBytes) : "—"}</strong>
                 </div>
               </div>
             </div>
@@ -680,14 +629,8 @@ export function DrivesPage() {
               key={d.id}
               drive={d}
               onSaved={(saved) => {
-                // Invalidate list requests that began before this write. Their
-                // old snapshot must not overwrite the just-confirmed value.
-                driveListRequestVersion.current += 1;
-                setList((prev) =>
-                  prev.map((item) =>
-                    item.id === saved.id ? { ...item, skipDirIds: saved.skipDirIds } : item
-                  )
-                );
+                detail.accept(saved.snapshot);
+                if (!saved.snapshot) void detail.refresh(["config"]);
               }}
             />
           </div>
@@ -778,10 +721,18 @@ export function DrivesPage() {
         </div>
       </AdminPageActions>
 
-      {(storage || loading) && (
-        <StorageSummary storage={storage} loading={!storage} />
-      )}
+      <StorageSummary storage={storage} loading={listData.storageLoading} />
 
+      {[
+        { title: "网盘列表", error: listData.listError, retry: listData.refreshList },
+        { title: "存储用量", error: listData.storageError, retry: listData.refreshStorage },
+        { title: "维护状态", error: listData.maintenanceError, retry: listData.refreshMaintenance },
+      ].map(({ title, error, retry }) => error && (
+        <div className="admin-detail-error" role="status" key={title}>
+          {title}更新失败：{error}
+          <button type="button" className="admin-btn" onClick={() => void retry()}>重试</button>
+        </div>
+      ))}
       {loading ? (
         <DriveListSkeleton />
       ) : loadError ? (

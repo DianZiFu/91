@@ -9,6 +9,7 @@ import (
 
 	"github.com/video-site/backend/internal/api"
 	"github.com/video-site/backend/internal/crawlerupload"
+	"github.com/video-site/backend/internal/driveevents"
 	"github.com/video-site/backend/internal/fingerprint"
 	"github.com/video-site/backend/internal/preview"
 )
@@ -180,6 +181,33 @@ func (a *App) driveGenerationStatuses() map[string]api.DriveGenerationStatuses {
 		}
 	}
 	return out
+}
+
+func (a *App) driveGenerationStatus(id string) api.DriveGenerationStatuses {
+	a.scanQueueMu.Lock()
+	scanning, progress := a.scanQueued[id], a.scanProgress[id]
+	a.scanQueueMu.Unlock()
+	a.mu.Lock()
+	previewWorker, thumbWorker, fingerprintWorker := a.workers[id], a.thumbWorkers[id], a.fingerprintWorkers[id]
+	a.mu.Unlock()
+	status := api.DriveGenerationStatuses{}
+	if scanning {
+		status.Scan = api.GenerationStatus{State: "scanning", ScannedCount: progress.Scanned, AddedCount: progress.Added}
+		if progress.CooldownUntil.After(time.Now()) {
+			status.Scan.State = "cooling"
+			status.Scan.CooldownUntil = formatOptionalRFC3339(progress.CooldownUntil)
+		}
+	}
+	status.Preview = generationStatusFromPreview(previewWorker.Status())
+	status.Thumbnail = generationStatusFromPreview(thumbWorker.Status())
+	status.Fingerprint = generationStatusFromFingerprint(fingerprintWorker.Status())
+	return status
+}
+
+func (a *App) notifyDriveRuntime(id string, immediate bool) {
+	if a.cat != nil {
+		a.cat.DriveEvents().Notify(id, immediate, driveevents.ActivityChanged)
+	}
 }
 
 func (a *App) previewGenerationVideoIDs() map[string]bool {
