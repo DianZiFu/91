@@ -1,5 +1,6 @@
 import { Activity } from "lucide-react";
 import * as api from "../api";
+import { DriveGenerationActions } from "./DriveGenerationActions";
 import {
   generationStateLabel,
   generationStateClass,
@@ -128,31 +129,13 @@ export function DriveGenerationPanel({
   d,
   runtimeLoading = false,
   countsLoading = false,
-  regenFailedId,
-  regenFailedThumbId,
-  regenFailedFingerprintId,
-  onRegenFailed,
-  onRegenFailedThumbnails,
-  onRegenFailedFingerprints,
+  onGenerationUpdated,
 }: {
   d: api.AdminDrive;
   runtimeLoading?: boolean;
   countsLoading?: boolean;
-  regenFailedId: string;
-  regenFailedThumbId: string;
-  regenFailedFingerprintId: string;
-  onRegenFailed: () => void;
-  onRegenFailedThumbnails: () => void;
-  onRegenFailedFingerprints: () => void;
+  onGenerationUpdated: () => void;
 }) {
-  const canQueueThumbnails =
-    (d.thumbnailFailedCount ?? 0) > 0 ||
-    (d.thumbnailPendingCount ?? 0) > 0 ||
-    (d.thumbnailDurationPendingCount ?? 0) > 0;
-  const canQueuePreviews =
-    (d.teaserFailedCount ?? 0) > 0 || (d.teaserPendingCount ?? 0) > 0;
-  const canQueueFingerprints =
-    (d.fingerprintFailedCount ?? 0) > 0 || (d.fingerprintPendingCount ?? 0) > 0;
   return (
     <div className="admin-detail-card">
       <header className="admin-detail-card__title">
@@ -199,29 +182,7 @@ export function DriveGenerationPanel({
         />
       </div>
 
-      <div className="admin-detail-actions admin-generation-actions">
-        <button
-          className="admin-btn"
-          disabled={!canQueueThumbnails || regenFailedThumbId === d.id}
-          onClick={onRegenFailedThumbnails}
-        >
-          <span>{(d.thumbnailFailedCount ?? 0) > 0 ? "重试失败封面" : "继续生成封面"}</span>
-        </button>
-        <button
-          className="admin-btn"
-          disabled={!canQueuePreviews || regenFailedId === d.id}
-          onClick={onRegenFailed}
-        >
-          <span>{(d.teaserFailedCount ?? 0) > 0 ? "重试失败预览" : "继续生成预览视频"}</span>
-        </button>
-        <button
-          className="admin-btn"
-          disabled={!canQueueFingerprints || regenFailedFingerprintId === d.id}
-          onClick={onRegenFailedFingerprints}
-        >
-          <span>{(d.fingerprintFailedCount ?? 0) > 0 ? "重试失败指纹" : "继续生成指纹"}</span>
-        </button>
-      </div>
+      <DriveGenerationActions driveId={d.id} onUpdated={onGenerationUpdated} />
     </div>
   );
 }

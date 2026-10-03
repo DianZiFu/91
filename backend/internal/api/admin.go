@@ -95,9 +95,7 @@ type AdminServer struct {
 	OnStopAllTasks                 func() int
 	OnRegenPreview                 func(videoID string)
 	OnRegenAllPreviews             func()
-	OnRegenFailedPreviews          func(driveID string)
-	OnRegenFailedThumbnails        func(driveID string)
-	OnRegenFailedFingerprints      func(driveID string)
+	OnDriveGenerationRequested     func(context.Context, string, DriveGenerationKind) (DriveGenerationResult, error)
 	OnDeleteVideo                  func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
 	OnStartBlacklistSourceDelete   func(BlacklistSourceDeleteRequest) bool
 	GetBlacklistSourceDeleteStatus func() BlacklistSourceDeleteStatus
@@ -269,9 +267,9 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Post("/drives/{id}/tasks/stop", a.handleStopDriveTasks)
 			r.Post("/drives/{id}/skip-dirs", a.handleSetDriveSkipDirs)
 			r.Get("/drives/{id}/dirtree", a.handleListDriveDirTree)
-			r.Post("/drives/{id}/previews/failed/regenerate", a.handleRegenFailedPreviews)
-			r.Post("/drives/{id}/thumbnails/failed/regenerate", a.handleRegenFailedThumbnails)
-			r.Post("/drives/{id}/fingerprints/failed/regenerate", a.handleRegenFailedFingerprints)
+			r.Post("/drives/{id}/previews/generate", a.handleGenerateDrivePreviews)
+			r.Post("/drives/{id}/thumbnails/generate", a.handleGenerateDriveThumbnails)
+			r.Post("/drives/{id}/fingerprints/generate", a.handleGenerateDriveFingerprints)
 
 			// 爬虫
 			r.Get("/crawlers", a.handleListCrawlers)

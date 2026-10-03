@@ -381,14 +381,8 @@ func main() {
 		OnRegenAllPreviews: func() {
 			go app.regenAllPreviews(ctx)
 		},
-		OnRegenFailedPreviews: func(driveID string) {
-			go app.regenFailedPreviews(ctx, driveID)
-		},
-		OnRegenFailedThumbnails: func(driveID string) {
-			go app.regenFailedThumbnails(ctx, driveID)
-		},
-		OnRegenFailedFingerprints: func(driveID string) {
-			go app.regenFailedFingerprints(ctx, driveID)
+		OnDriveGenerationRequested: func(reqCtx context.Context, driveID string, kind api.DriveGenerationKind) (api.DriveGenerationResult, error) {
+			return app.requestDriveGeneration(reqCtx, ctx, driveID, kind)
 		},
 		OnDeleteVideo: func(reqCtx context.Context, videoID string, deleteSource bool) (api.DeleteVideoResult, error) {
 			return app.deleteVideo(reqCtx, videoID, deleteSource)

@@ -3375,14 +3375,14 @@ func TestHandleTestCrawlerScriptRunsImportedScript(t *testing.T) {
 	defer media.Close()
 
 	script := filepath.Join(t.TempDir(), "crawler.py")
- body:=`CRAWLER_NAME = "Dry Run Test"
+	body := `CRAWLER_NAME = "Dry Run Test"
 CRAWLER_PROTOCOL = "crawler.v3"
 import json,sys
 for line in sys.stdin:
     c=json.loads(line)
     r={"request_id":c["request_id"]}
     if c["type"]=="discover": r.update(type="page",items=[dict(discovery_key="dry",source_id="dry-1",locator={})],next_cursor=None)
-    elif c["type"]=="resolve": r.update(type="item",discovery_key="dry",source_id="dry-1",title="Dry Run Video",media=dict(type="url",url="`+media.URL+`/video.mp4"))
+    elif c["type"]=="resolve": r.update(type="item",discovery_key="dry",source_id="dry-1",title="Dry Run Video",media=dict(type="url",url="` + media.URL + `/video.mp4"))
     else: r.update(type="stopped")
     print(json.dumps(r),flush=True)
     if c["type"]=="stop": break
@@ -3609,19 +3609,23 @@ func TestHandleListDrivesIncludesTeaserCounts(t *testing.T) {
 	}
 }
 
-func TestHandleRegenFailedFingerprintsInvokesHook(t *testing.T) {
+func TestHandleGenerateDriveFingerprintsInvokesHook(t *testing.T) {
 	called := ""
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives/drive-one/fingerprints/failed/regenerate", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives/drive-one/fingerprints/generate", nil)
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", "drive-one")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 	rr := httptest.NewRecorder()
 
 	(&AdminServer{
-		OnRegenFailedFingerprints: func(driveID string) {
+		OnDriveGenerationRequested: func(_ context.Context, driveID string, kind DriveGenerationKind) (DriveGenerationResult, error) {
+			if kind != DriveGenerationFingerprints {
+				t.Fatalf("kind = %q", kind)
+			}
 			called = driveID
+			return DriveGenerationResult{State: "started", Message: "started"}, nil
 		},
-	}).handleRegenFailedFingerprints(rr, req)
+	}).handleGenerateDriveFingerprints(rr, req)
 
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
@@ -4429,20 +4433,24 @@ func TestHandleRegenAllPreviewsInvokesHook(t *testing.T) {
 	}
 }
 
-func TestHandleRegenFailedPreviewsInvokesHookWithDriveID(t *testing.T) {
+func TestHandleGenerateDrivePreviewsInvokesHookWithDriveID(t *testing.T) {
 	calledWith := ""
 	server := &AdminServer{
-		OnRegenFailedPreviews: func(driveID string) {
+		OnDriveGenerationRequested: func(_ context.Context, driveID string, kind DriveGenerationKind) (DriveGenerationResult, error) {
+			if kind != DriveGenerationPreviews {
+				t.Fatalf("kind = %q", kind)
+			}
 			calledWith = driveID
+			return DriveGenerationResult{State: "started", Message: "started"}, nil
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives/PikPak/previews/failed/regenerate", nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives/PikPak/previews/generate", nil)
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", "PikPak")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 	rr := httptest.NewRecorder()
-	server.handleRegenFailedPreviews(rr, req)
+	server.handleGenerateDrivePreviews(rr, req)
 
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())

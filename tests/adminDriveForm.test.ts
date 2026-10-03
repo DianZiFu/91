@@ -10,6 +10,10 @@ const driveComponentsSource = readFileSync(
   new URL("../src/admin/drive/DriveComponents.tsx", import.meta.url),
   "utf8"
 );
+const driveGenerationActionsSource = readFileSync(
+  new URL("../src/admin/drive/DriveGenerationActions.tsx", import.meta.url),
+  "utf8"
+);
 const storageSummarySource = readFileSync(
   new URL("../src/admin/drive/StorageSummary.tsx", import.meta.url),
   "utf8"
@@ -1297,23 +1301,22 @@ test("new drive type selection alone is not treated as unsaved config", () => {
   assert.doesNotMatch(helper, /form\.kind/);
 });
 
-test("drive generation actions can resume pending work after stop", () => {
-  assert.match(driveComponentsSource, /thumbnailPendingCount/);
-  assert.match(driveComponentsSource, /teaserPendingCount/);
-  assert.match(driveComponentsSource, /fingerprintPendingCount/);
-  assert.match(driveComponentsSource, /继续生成封面/);
-  assert.match(driveComponentsSource, /继续生成预览视频/);
-  assert.match(driveComponentsSource, /继续生成指纹/);
+test("drive generation actions keep fixed labels and remain clickable", () => {
+  assert.match(driveGenerationActionsSource, /label: "生成封面"/);
+  assert.match(driveGenerationActionsSource, /label: "生成预览"/);
+  assert.match(driveGenerationActionsSource, /label: "生成指纹"/);
+  assert.doesNotMatch(driveGenerationActionsSource, /disabled=|重试失败|继续生成/);
+  assert.match(driveComponentsSource, /<DriveGenerationActions driveId=\{d\.id\}/);
+  assert.match(drivesPageLoadingSource, /<DriveGenerationActions driveId=\{driveId\}/);
 });
 
 test("drive generation actions are iconless and evenly distributed", () => {
   assert.match(
-    driveComponentsSource,
+    driveGenerationActionsSource,
     /className="admin-detail-actions admin-generation-actions"/
   );
-  assert.match(driveComponentsSource, /重试失败预览/);
-  assert.doesNotMatch(driveComponentsSource, /重试失败预览视频/);
-  assert.doesNotMatch(driveComponentsSource, /RotateCcw|Wand2|CircleStop/);
+  assert.match(driveGenerationActionsSource, /label: "生成预览"/);
+  assert.doesNotMatch(driveGenerationActionsSource, /RotateCcw|Wand2|CircleStop/);
   assert.match(
     adminCss,
     /\.admin-generation-actions\s*\{[^}]*grid-template-columns\s*:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/s

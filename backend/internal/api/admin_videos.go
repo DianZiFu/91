@@ -216,37 +216,3 @@ func (a *AdminServer) handleRegenAllPreviews(w http.ResponseWriter, r *http.Requ
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
 }
-
-func (a *AdminServer) handleRegenFailedPreviews(w http.ResponseWriter, r *http.Request) {
-	if !a.requirePreviewEnabled(w) {
-		return
-	}
-	id := chi.URLParam(r, "id")
-	if a.OnRegenFailedPreviews != nil {
-		a.OnRegenFailedPreviews(id)
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
-}
-
-// handleRegenFailedThumbnails 触发某 drive 下所有 thumbnail_status=failed 的封面
-// 重新入队生成。和 handleRegenFailedPreviews 行为对称（一个管预览视频，一个管封面）。
-//
-// 立即返回 202；实际执行在后台 goroutine 跑，状态可在下次 GET /admin/api/drives
-// 的 thumbnailFailedCount / thumbnailGenerationStatus 看变化。
-func (a *AdminServer) handleRegenFailedThumbnails(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if a.OnRegenFailedThumbnails != nil {
-		a.OnRegenFailedThumbnails(id)
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
-}
-
-// handleRegenFailedFingerprints triggers regeneration for all failed sampled
-// fingerprints on a drive. It mirrors the failed preview-video/thumbnail retry endpoints.
-func (a *AdminServer) handleRegenFailedFingerprints(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if a.OnRegenFailedFingerprints != nil {
-		a.OnRegenFailedFingerprints(id)
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
-}

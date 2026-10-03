@@ -95,9 +95,6 @@ export function DrivesPage() {
   const [saving, setSaving] = useState(false);
   const [editingCredentialsId, setEditingCredentialsId] = useState("");
   const [deletingId, setDeletingId] = useState("");
-  const [regenFailedId, setRegenFailedId] = useState("");
-  const [regenFailedThumbId, setRegenFailedThumbId] = useState("");
-  const [regenFailedFingerprintId, setRegenFailedFingerprintId] = useState("");
   const [scanningAll, setScanningAll] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
   const [scanningDriveIds, setScanningDriveIds] = useState<Record<string, boolean>>({});
@@ -378,51 +375,13 @@ export function DrivesPage() {
     }
   }
 
-  async function handleRegenFailed(d: api.AdminDrive) {
-    setRegenFailedId(d.id);
-    try {
-      await api.regenFailedPreviews(d.id);
-      show("已触发预览视频生成", "success");
-      refresh();
-    } catch (e) {
-      show(e instanceof Error ? e.message : "触发失败", "error");
-    } finally {
-      setRegenFailedId("");
-    }
-  }
-
-  async function handleRegenFailedThumbnails(d: api.AdminDrive) {
-    setRegenFailedThumbId(d.id);
-    try {
-      await api.regenFailedThumbnails(d.id);
-      show("已触发封面生成", "success");
-      refresh();
-    } catch (e) {
-      show(e instanceof Error ? e.message : "触发失败", "error");
-    } finally {
-      setRegenFailedThumbId("");
-    }
-  }
-
-  async function handleRegenFailedFingerprints(d: api.AdminDrive) {
-    setRegenFailedFingerprintId(d.id);
-    try {
-      await api.regenFailedFingerprints(d.id);
-      show("已触发指纹生成", "success");
-      refresh();
-    } catch (e) {
-      show(e instanceof Error ? e.message : "触发失败", "error");
-    } finally {
-      setRegenFailedFingerprintId("");
-    }
-  }
-
   const selectedDrive = detail.drive;
 
   if (selectedDriveId && !selectedDrive) {
     if (loading) {
       return (
         <DriveDetailLoading
+          driveId={selectedDriveId}
           onBack={() => closeDriveDetail({ replace: true })}
         />
       );
@@ -573,12 +532,7 @@ export function DrivesPage() {
               d={d}
               runtimeLoading={!detail.resources.runtime.data && detail.resources.runtime.loading}
               countsLoading={!detail.resources.stats.data}
-              regenFailedId={regenFailedId}
-              regenFailedThumbId={regenFailedThumbId}
-              regenFailedFingerprintId={regenFailedFingerprintId}
-              onRegenFailed={() => handleRegenFailed(d)}
-              onRegenFailedThumbnails={() => handleRegenFailedThumbnails(d)}
-              onRegenFailedFingerprints={() => handleRegenFailedFingerprints(d)}
+              onGenerationUpdated={() => void refresh()}
             />
 
             <ScanResultDetails

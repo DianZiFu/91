@@ -9,6 +9,7 @@ import { StorageSummary } from "./drive/StorageSummary";
 import { SkipDirsLoadingIndicator } from "./drive/SkipDirsLoadingIndicator";
 import { ScanResultDetails } from "./drive/ScanResultDetails";
 import { SkipDirsIcon } from "./icons/SkipDirsIcon";
+import { DriveGenerationActions } from "./drive/DriveGenerationActions";
 
 const DRIVE_LIST_SKELETON_COUNT = 6;
 const DRIVE_GENERATION_SECTIONS = [
@@ -39,7 +40,7 @@ export function DriveListSkeleton() {
   );
 }
 
-export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
+export function DriveDetailLoading({ driveId, onBack }: { driveId: string; onBack: () => void }) {
   return (
     <section className="admin-page admin-drives-page">
       <header className="admin-drive-detail__header-bar">
@@ -110,7 +111,7 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
           </div>
         </div>
 
-        <div className="admin-drive-detail-layout__status" aria-hidden="true">
+        <div className="admin-drive-detail-layout__status">
           <div className="admin-detail-card">
             <header className="admin-detail-card__title">
               <div className="admin-detail-card__title-left">
@@ -119,7 +120,7 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
               </div>
             </header>
 
-            <div className="admin-gen-columns">
+            <div className="admin-gen-columns" aria-hidden="true">
               {DRIVE_GENERATION_SECTIONS.map((section) => (
                 <div key={section.label} className="admin-gen-col">
                   <div className="admin-gen-col__head">
@@ -139,15 +140,7 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
               ))}
             </div>
 
-            <div className="admin-detail-actions admin-generation-actions">
-              {["继续生成封面", "继续生成预览视频", "继续生成指纹"].map(
-                (label) => (
-                  <button key={label} type="button" className="admin-btn" disabled>
-                    <span>{label}</span>
-                  </button>
-                )
-              )}
-            </div>
+            <DriveGenerationActions driveId={driveId} />
           </div>
 
           <ScanResultDetails loading />
@@ -190,10 +183,12 @@ export function DriveDetailLoading({ onBack }: { onBack: () => void }) {
 
 export function DrivesPageLoading() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const driveId = searchParams.get("drive");
 
-  if (searchParams.get("drive")) {
+  if (driveId) {
     return (
       <DriveDetailLoading
+        driveId={driveId}
         onBack={() => {
           setSearchParams(
             (previous) => {

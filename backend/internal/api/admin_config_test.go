@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -154,11 +155,14 @@ func TestGlobalPreviewSwitchControlsRegenerationEndpoints(t *testing.T) {
 	calls := 0
 	server.OnRegenPreview = func(string) { calls++ }
 	server.OnRegenAllPreviews = func() { calls++ }
-	server.OnRegenFailedPreviews = func(string) { calls++ }
+	server.OnDriveGenerationRequested = func(context.Context, string, DriveGenerationKind) (DriveGenerationResult, error) {
+		calls++
+		return DriveGenerationResult{State: "started", Message: "started"}, nil
+	}
 	handlers := []http.HandlerFunc{
 		server.handleRegenPreview,
 		server.handleRegenAllPreviews,
-		server.handleRegenFailedPreviews,
+		server.handleGenerateDrivePreviews,
 	}
 	for _, handler := range handlers {
 		rr := httptest.NewRecorder()

@@ -1067,30 +1067,25 @@ export function setDriveSkipDirIds(id: string, dirIds: string[]) {
   );
 }
 
-export function regenFailedPreviews(id: string) {
-  return request<{ ok: boolean }>(
-    `/drives/${encodeURIComponent(id)}/previews/failed/regenerate`,
+export type DriveGenerationResult = { state: "started" | "busy" | "ready"; message: string };
+
+export function generateDrivePreviews(id: string) {
+  return request<DriveGenerationResult>(
+    `/drives/${encodeURIComponent(id)}/previews/generate`,
     { method: "POST" }
   );
 }
 
-/**
- * 触发某 drive 下所有 thumbnail_status=failed 的封面重新入队生成。
- * 与 regenFailedPreviews 行为对称（一个管预览视频，一个管封面）。
- *
- * 后端立即返回 202；实际状态变化在下次 listDrives 拉到的 thumbnailFailedCount /
- * thumbnailGenerationStatus 字段里观察。
- */
-export function regenFailedThumbnails(id: string) {
-  return request<{ ok: boolean }>(
-    `/drives/${encodeURIComponent(id)}/thumbnails/failed/regenerate`,
+export function generateDriveThumbnails(id: string) {
+  return request<DriveGenerationResult>(
+    `/drives/${encodeURIComponent(id)}/thumbnails/generate`,
     { method: "POST" }
   );
 }
 
-export function regenFailedFingerprints(id: string) {
-  return request<{ ok: boolean }>(
-    `/drives/${encodeURIComponent(id)}/fingerprints/failed/regenerate`,
+export function generateDriveFingerprints(id: string) {
+  return request<DriveGenerationResult>(
+    `/drives/${encodeURIComponent(id)}/fingerprints/generate`,
     { method: "POST" }
   );
 }

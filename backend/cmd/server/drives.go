@@ -86,7 +86,7 @@ func (a *App) reloadDriveRuntime(ctx context.Context, driveID string) error {
 	}
 
 	// 本地存储开启 .strm 越root后，之前因 strm 指向目录外而失败的封面/
-	// 预览/指纹应自动重试，省得用户再手动点三个"重试失败"按钮。
+	// 预览/指纹应自动重试，省得用户再手动触发资源生成。
 	if d.Kind == localstorage.Kind &&
 		parseBoolDefault(strings.TrimSpace(d.Credentials["strm_allow_outside_root"]), false) {
 		a.scheduleDriveTaskAfterConfig(ctx, driveID, 0, func(taskCtx context.Context) {
@@ -191,11 +191,12 @@ type driveOperationGate struct {
 	deleting   bool
 	retired    bool
 
-	applyScheduled bool
-	pendingScopes  api.DriveConfigUpdateScope
-	runtimeApply   func() error
-	scanApply      func() error
-	activeConfig   *catalog.Drive
+	applyScheduled     bool
+	pendingScopes      api.DriveConfigUpdateScope
+	runtimeApply       func() error
+	scanApply          func() error
+	activeConfig       *catalog.Drive
+	generationRequests map[api.DriveGenerationKind]bool
 }
 
 func newDriveOperationGate() *driveOperationGate {
@@ -1822,14 +1823,14 @@ func (a *App) cancelDriveTasks(ctx context.Context, driveID string) bool {
 	// Cancellation must remain available while a configuration change is
 	// waiting for these very tasks to drain. Taking ordinary task admission here
 	// would make "stop" wait behind the pending change and create a deadlock.
+	gate := a.driveOperationGate(driveID)
+	gate.controlMu.Lock()
+	defer gate.controlMu.Unlock()
 	canceled := a.cancelDriveTaskContexts(driveID)
 	queued := a.clearQueuedDriveTask(driveID)
 	fingerprintQueued := a.clearFingerprintQueueing(driveID)
 	uploading := a.clearCrawlerUploadProgress(driveID)
-	gate := a.driveOperationGate(driveID)
-	gate.controlMu.Lock()
 	hadWorkers := a.resetDriveGenerationWorkers(ctx, driveID)
-	gate.controlMu.Unlock()
 	stopped := canceled > 0 || queued || fingerprintQueued || uploading || hadWorkers
 	log.Printf("[tasks] stop drive=%s stopped=%v canceled_tasks=%d queued=%v fingerprint_queue=%v uploading=%v workers=%v",
 		driveID, stopped, canceled, queued, fingerprintQueued, uploading, hadWorkers)
