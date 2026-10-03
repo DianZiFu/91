@@ -7775,6 +7775,70 @@ body.admin-mobile-nav-open {
   }
 }
 
+.admin-drive-unavailable {
+  display: grid;
+  flex: 1 0 auto;
+  min-height: 360px;
+  padding: var(--space-6) var(--space-4);
+  place-items: center;
+}
+
+.admin-drive-unavailable__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(100%, 420px);
+  padding: var(--space-8) var(--space-7) var(--space-7);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-md);
+  text-align: center;
+}
+
+.admin-drive-unavailable__icon {
+  display: grid;
+  width: 60px;
+  height: 60px;
+  margin-bottom: var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  place-items: center;
+}
+
+.admin-drive-unavailable__card.is-error .admin-drive-unavailable__icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.admin-drive-unavailable__title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--font-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+}
+
+.admin-drive-unavailable__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+.admin-drive-unavailable__actions .admin-btn {
+  min-height: 40px;
+  padding-inline: var(--space-4);
+}
+
+@media (max-width: 480px) {
+  .admin-drive-unavailable__card {
+    padding: var(--space-7) var(--space-6);
+  }
+}
+
 .admin-drive-detail__header-bar {
   display: flex;
   align-items: center;

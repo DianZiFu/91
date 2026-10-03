@@ -38,6 +38,7 @@ import {
 import { StorageSummary } from "./drive/StorageSummary";
 import { DriveDetailLoading, DriveListSkeleton } from "./DrivesPageLoading";
 import { DriveForm } from "./drive/DriveForm";
+import { DriveDetailUnavailable } from "./drive/DriveDetailUnavailable";
 import {
   changedCredentialValues,
   driveCredentialsForForm,
@@ -387,38 +388,13 @@ export function DrivesPage() {
       );
     }
 
-    const title = loadError ? "网盘详情" : "网盘不存在";
-
     return (
-      <section className="admin-page admin-drives-page">
-        <header className="admin-drive-detail__header-bar">
-          <button
-            type="button"
-            className="admin-drive-detail__back-btn"
-            onClick={() => closeDriveDetail({ replace: true })}
-            title="返回网盘列表"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div className="admin-drive-detail__title-wrap">
-            <h1 className="admin-drive-detail__title">{title}</h1>
-          </div>
-        </header>
-
-        {loadError ? (
-          <div className="admin-error-state">
-            <strong>网盘数据加载失败</strong>
-            <span>{loadError}</span>
-            <button type="button" className="admin-btn" onClick={refresh}>
-              <RefreshCw size={13} /> 重试
-            </button>
-          </div>
-        ) : (
-          <div className="admin-card admin-empty">
-            未找到这个网盘，可能已被删除或配置尚未加载。
-          </div>
-        )}
-      </section>
+      <DriveDetailUnavailable
+        notFound={detail.notFound}
+        retrying={detail.resources.config.loading}
+        onBack={() => closeDriveDetail({ replace: true })}
+        onRetry={() => void detail.refresh()}
+      />
     );
   }
 

@@ -1228,7 +1228,7 @@ test("drive detail refresh state uses the detail skeleton without list actions",
     /if \(loading\) \{[\s\S]*<DriveDetailLoading[\s\S]*onBack=\{\(\) => closeDriveDetail\(\{ replace: true \}\)\}/
   );
   assert.doesNotMatch(pendingDetailSource, /<AdminLoading \/>/);
-  assert.match(pendingDetailSource, /网盘不存在/);
+  assert.match(pendingDetailSource, /<DriveDetailUnavailable[\s\S]*notFound=\{detail\.notFound\}/);
   assert.doesNotMatch(pendingDetailSource, /扫描所有网盘|停止所有任务|添加网盘/);
   assert.match(
     drivesPageLoadingSource,
