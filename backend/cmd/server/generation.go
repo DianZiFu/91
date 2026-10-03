@@ -25,6 +25,8 @@ func (a *App) enqueueUploadedVideo(ctx context.Context, v *catalog.Video) {
 		return
 	}
 	defer release()
+	finishEnqueue := a.beginDriveResourceEnqueue(v.DriveID)
+	defer finishEnqueue()
 	a.mu.Lock()
 	worker := a.workers[v.DriveID]
 	thumbWorker := a.thumbWorkers[v.DriveID]
@@ -55,6 +57,8 @@ func (a *App) regenPreview(ctx context.Context, videoID string) {
 		return
 	}
 	defer done()
+	finishEnqueue := a.beginDriveResourceEnqueue(v.DriveID)
+	defer finishEnqueue()
 	a.mu.Lock()
 	worker := a.workers[v.DriveID]
 	a.mu.Unlock()
@@ -100,7 +104,8 @@ func (a *App) regenAllPreviews(ctx context.Context) {
 				rejected[v.DriveID] = true
 				continue
 			}
-			admission = driveAdmission{ctx: taskCtx, done: done}
+			finishEnqueue := a.beginDriveResourceEnqueue(v.DriveID)
+			admission = driveAdmission{ctx: taskCtx, done: func() { finishEnqueue(); done() }}
 			admissions[v.DriveID] = admission
 		}
 		a.mu.Lock()
@@ -140,11 +145,8 @@ func (a *App) regenFailedPreviews(ctx context.Context, driveID string) {
 	a.regenerateDriveResources(ctx, driveID, api.DriveGenerationPreviews)
 }
 
-// regenFailedThumbnails 把某 drive 下 thumbnail_status=failed 的视频全部重置为
-// pending 并重新入队封面 worker。与 regenFailedPreviews 行为对称：那条管预览视频，
-// 这条管封面图（两个 worker 是独立队列）。
-//
-// 状态重置保留已有封面以便只补全缺失的时长；取链 / ffmpeg 在 thumb worker 里执行。
+// regenFailedThumbnails retries missing failed covers. Duration-only work belongs
+// after this drive's resource generation and never changes existing thumbnail state.
 func (a *App) regenFailedThumbnails(ctx context.Context, driveID string) {
 	a.regenerateDriveResources(ctx, driveID, api.DriveGenerationThumbnails)
 }
@@ -195,7 +197,7 @@ func (a *App) listCrawlerDriveIDs(ctx context.Context) []string {
 // waitAllPreviewQueuesIdle 阻塞直到所有 drive 的封面、预览视频和指纹 worker
 // 队列都为空且无 in-flight 任务。
 //
-// 顺序：先等所有 thumb worker，再等预览视频，最后等指纹。队列生成时互不等待；
+// 顺序：先等预览视频，再等封面（预览完成会追加封面任务），最后等指纹。队列生成时互不等待；
 // nightly 只在 phase 边界统一等待它们都 drain，保证爬虫视频迁移前本地资产已产出。
 // 若 ctx 在等待中被取消（shutdown / 管理员停止），立即返回 ctx.Err。
 func (a *App) waitAllPreviewQueuesIdle(ctx context.Context) error {
@@ -214,12 +216,12 @@ func (a *App) waitAllPreviewQueuesIdle(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 
-	for _, w := range thumbWorkers {
+	for _, w := range previewWorkers {
 		if err := w.WaitIdle(ctx); err != nil {
 			return err
 		}
 	}
-	for _, w := range previewWorkers {
+	for _, w := range thumbWorkers {
 		if err := w.WaitIdle(ctx); err != nil {
 			return err
 		}
@@ -232,7 +234,7 @@ func (a *App) waitAllPreviewQueuesIdle(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return a.waitDurationBackfillsIdle(ctx, "")
 }
 
 func (a *App) waitDriveGenerationQueuesIdle(ctx context.Context, driveID string) error {
@@ -241,10 +243,10 @@ func (a *App) waitDriveGenerationQueuesIdle(ctx context.Context, driveID string)
 	previewWorker := a.workers[driveID]
 	fingerprintWorker := a.fingerprintWorkers[driveID]
 	a.mu.Unlock()
-	if err := thumbWorker.WaitIdle(ctx); err != nil {
+	if err := previewWorker.WaitIdle(ctx); err != nil {
 		return err
 	}
-	if err := previewWorker.WaitIdle(ctx); err != nil {
+	if err := thumbWorker.WaitIdle(ctx); err != nil {
 		return err
 	}
 	if err := a.waitFingerprintQueueingIdle(ctx, driveID); err != nil {

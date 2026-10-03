@@ -98,12 +98,14 @@ func (a *App) runScriptCrawlerCrawl(ctx context.Context, driveID string) error {
 func (a *App) executeCrawlerTask(ctx context.Context, driveID string, crawler *scriptcrawler.Crawler, task *scriptcrawler.Task) (*crawljob.Result, error) {
 	result, runErr := crawler.RunTask(ctx, task, func(ctx context.Context, task *scriptcrawler.Task) error {
 		if err := task.RunStage(ctx, "generation", func(ctx context.Context) error {
+			finishEnqueue := a.beginDriveResourceEnqueue(driveID)
 			a.mu.Lock()
 			worker, thumbWorker, fingerprintWorker := a.workers[driveID], a.thumbWorkers[driveID], a.fingerprintWorkers[driveID]
 			a.mu.Unlock()
 			a.enqueueFingerprintBackfill(ctx, driveID, fingerprintWorker)
 			a.enqueueDriveGeneration(ctx, driveID, worker, thumbWorker)
-			return a.waitDriveGenerationQueuesIdle(ctx, driveID)
+			finishEnqueue()
+			return a.waitDriveResourcesIdle(ctx, driveID)
 		}); err != nil {
 			return err
 		}
@@ -250,7 +252,7 @@ func (a *App) finishCrawlerProcessing(ctx context.Context, driveID string) error
 	if d == nil {
 		return fmt.Errorf("crawler configuration missing")
 	}
-	if err := a.waitDriveGenerationQueuesIdle(ctx, driveID); err != nil {
+	if err := a.waitDriveResourcesIdle(ctx, driveID); err != nil {
 		return err
 	}
 	var uploadErr error
@@ -299,6 +301,8 @@ func (a *App) restoreScriptCrawlerVideos(ctx context.Context, driveID string) er
 	}
 	restored, err := crawler.RestoreRequestedVideos(ctx)
 	if restored > 0 {
+		finishEnqueue := a.beginDriveResourceEnqueue(driveID)
+		defer finishEnqueue()
 		a.mu.Lock()
 		worker := a.workers[driveID]
 		thumbWorker := a.thumbWorkers[driveID]

@@ -12,12 +12,10 @@ export function GenerationCounts({
   ready,
   pending,
   failed,
-  durationPending,
 }: {
   ready?: number;
   pending?: number;
   failed?: number;
-  durationPending?: number;
 }) {
   return (
     <div className="admin-generation-counts">
@@ -30,11 +28,6 @@ export function GenerationCounts({
       <span className="admin-drive-teaser__metric is-failed">
         失败 {failed ?? 0}
       </span>
-      {(durationPending ?? 0) > 0 && (
-        <span className="admin-drive-teaser__metric">
-          待补时长 {durationPending}
-        </span>
-      )}
     </div>
   );
 }
@@ -160,7 +153,6 @@ export function DriveGenerationPanel({
           ready={d.thumbnailReadyCount}
           pending={d.thumbnailPendingCount}
           failed={d.thumbnailFailedCount}
-          extra={d.thumbnailDurationPendingCount}
         />
         <DriveGenCol
           label="预览视频"
@@ -193,7 +185,6 @@ function DriveGenCol({
   ready,
   pending,
   failed,
-  extra,
   showCounts = true,
   loading = false,
   countsLoading = false,
@@ -203,7 +194,6 @@ function DriveGenCol({
   ready?: number;
   pending?: number;
   failed?: number;
-  extra?: number;
   showCounts?: boolean;
   loading?: boolean;
   countsLoading?: boolean;
@@ -237,9 +227,6 @@ function DriveGenCol({
           <div className="admin-gen-col__count"><span>就绪</span><strong>{countsLoading ? "—" : ready ?? 0}</strong></div>
           <div className="admin-gen-col__count"><span>待生成</span><strong>{countsLoading ? "—" : pending ?? 0}</strong></div>
           <div className="admin-gen-col__count"><span>失败</span><strong>{countsLoading ? "—" : failed ?? 0}</strong></div>
-          {(extra ?? 0) > 0 && (
-            <div className="admin-gen-col__count"><span>待补时长</span><strong>{extra}</strong></div>
-          )}
         </div>
       )}
     </div>

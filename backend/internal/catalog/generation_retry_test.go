@@ -40,7 +40,7 @@ func TestResetFailedGenerationSelectsEligibleWork(t *testing.T) {
 		`UPDATE videos SET thumbnail_status = 'pending', preview_status = 'pending', fingerprint_status = 'pending' WHERE id = 'pending'`,
 		`UPDATE videos SET hidden = 1 WHERE id = 'hidden'`,
 		`UPDATE videos SET thumbnail_status = 'skipped', preview_status = 'disabled', sampled_sha256 = 'existing-hash' WHERE id = 'disabled'`,
-		`UPDATE videos SET thumbnail_url = '/p/thumb/probe', thumbnail_updated_at = 789 WHERE id = 'probe'`,
+		`UPDATE videos SET thumbnail_url = '/p/thumb/probe', thumbnail_updated_at = 789, thumbnail_status = 'ready' WHERE id = 'probe'`,
 		`UPDATE videos SET size_bytes = 0 WHERE id = 'unknown-size'`,
 		// The materialized representative flag is maintained by deduplication.
 		// Fingerprint sampling must still visit noncanonical sources.
@@ -54,7 +54,7 @@ func TestResetFailedGenerationSelectsEligibleWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts != (GenerationRetryCounts{Thumbnails: 3, Previews: 3, Fingerprints: 3}) {
+	if counts != (GenerationRetryCounts{Thumbnails: 2, Previews: 3, Fingerprints: 3}) {
 		t.Fatalf("retry counts = %+v", counts)
 	}
 	for _, tc := range []struct {
@@ -68,7 +68,7 @@ func TestResetFailedGenerationSelectsEligibleWork(t *testing.T) {
 		{"other", "failed", "failed", "failed"},
 		{"disabled", "skipped", "disabled", "failed"},
 		{"duplicate", "failed", "failed", "pending"},
-		{"probe", "pending", "pending", "pending"},
+		{"probe", "ready", "pending", "pending"},
 		{"unknown-size", "pending", "pending", "failed"},
 	} {
 		var thumbnail, preview, fingerprint string

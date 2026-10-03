@@ -52,7 +52,7 @@ func TestThumbWorkerUpdatesThumbnailAndDurationWithoutChangingPreviewStatus(t *t
 	}
 }
 
-func TestThumbWorkerBackfillsDurationWhenThumbnailAlreadyExists(t *testing.T) {
+func TestThumbWorkerDefersDurationUntilFinalBackfill(t *testing.T) {
 	ctx := context.Background()
 	cat, video := seedPreviewTestVideo(t, "thumb-worker-existing-thumbnail")
 	video.ThumbnailURL = "/p/thumb/" + video.ID
@@ -65,6 +65,10 @@ func TestThumbWorkerBackfillsDurationWhenThumbnailAlreadyExists(t *testing.T) {
 	worker := NewThumbWorker(gen, cat, drv)
 
 	worker.process(ctx, video)
+	if gen.probeCalls != 0 {
+		t.Fatal("ordinary cover work probed existing thumbnail duration")
+	}
+	worker.processDuration(ctx, video)
 
 	got, err := cat.GetVideo(ctx, video.ID)
 	if err != nil {
@@ -120,7 +124,7 @@ func TestThumbWorkerGeneratesThumbnailForCrawlerLikeVideoID(t *testing.T) {
 	}
 }
 
-func TestThumbWorkerSkipsDurationBackfillWhenExistingThumbnailCannotBeProbed(t *testing.T) {
+func TestDurationBackfillFailurePreservesReadyThumbnail(t *testing.T) {
 	ctx := context.Background()
 	cat, video := seedPreviewTestVideo(t, "thumb-worker-existing-thumbnail-probe-fails")
 	video.ThumbnailURL = "/p/thumb/" + video.ID
@@ -128,11 +132,11 @@ func TestThumbWorkerSkipsDurationBackfillWhenExistingThumbnailCannotBeProbed(t *
 		t.Fatalf("update video: %v", err)
 	}
 
-	gen := &fakeThumbGenerator{probeErr: errors.New("invalid media")}
+	gen := &fakeThumbGenerator{probeErr: errors.New("invalid data found when processing input")}
 	drv := &previewFakeDrive{}
 	worker := NewThumbWorker(gen, cat, drv)
 
-	worker.process(ctx, video)
+	worker.processDuration(ctx, video)
 
 	got, err := cat.GetVideo(ctx, video.ID)
 	if err != nil {
@@ -144,19 +148,23 @@ func TestThumbWorkerSkipsDurationBackfillWhenExistingThumbnailCannotBeProbed(t *
 	if got.DurationSeconds != 0 {
 		t.Fatalf("duration = %d, want still unknown", got.DurationSeconds)
 	}
-	skipped, err := cat.ListVideosByThumbnailStatus(ctx, video.DriveID, "skipped", 0)
+	ready, err := cat.ListVideosByThumbnailStatus(ctx, video.DriveID, "ready", 0)
 	if err != nil {
-		t.Fatalf("list skipped thumbnails: %v", err)
+		t.Fatalf("list ready thumbnails: %v", err)
 	}
-	if len(skipped) != 1 || skipped[0].ID != video.ID {
-		t.Fatalf("skipped thumbnails = %#v, want only %s", skipped, video.ID)
+	if len(ready) != 1 || ready[0].ID != video.ID {
+		t.Fatalf("ready thumbnails = %#v, want only %s", ready, video.ID)
+	}
+	worker.process(ctx, video)
+	if gen.probeCalls != 1 {
+		t.Fatalf("ordinary cover work repeated duration probe %d times", gen.probeCalls)
 	}
 	missing, err := cat.CountVideosNeedingThumbnail(ctx, video.DriveID)
 	if err != nil {
 		t.Fatalf("count videos needing thumbnail: %v", err)
 	}
 	if missing != 0 {
-		t.Fatalf("missing thumbnails = %d, want 0 after duration backfill is skipped", missing)
+		t.Fatalf("missing thumbnails = %d, want 0 for an existing cover", missing)
 	}
 }
 
@@ -747,6 +755,36 @@ func TestThumbWorkerRateLimitHonorsRetryAfter(t *testing.T) {
 		t.Fatalf("thumbnail = %q, want unchanged after rate limit", got.ThumbnailURL)
 	}
 	assertCooldownAround(t, worker.Status().CooldownUntil, before, 2*time.Hour)
+}
+
+func TestThumbWorkerProviderErrorsRespectThumbnailRetryLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cat, video := seedPreviewTestVideo(t, "thumb-provider-retry-limit")
+	gen := &fakeThumbGenerator{
+		probeDuration: 42,
+		generateErr:   errors.New("Server returned 503 Service Unavailable"),
+	}
+	worker := NewThumbWorker(gen, cat, &previewFakeDrive{kind: "pikpak"})
+	worker.RateLimitCooldown = time.Millisecond
+	if !worker.EnqueueBlocking(ctx, video) {
+		t.Fatal("thumbnail enqueue failed")
+	}
+	for attempt := 0; attempt < defaultThumbTransientMediaMaxFailures; attempt++ {
+		select {
+		case queued := <-worker.ch:
+			worker.processQueued(ctx, queued)
+		case <-ctx.Done():
+			t.Fatal("thumbnail retry was not queued")
+		}
+	}
+	if worker.Status().QueueLength != 0 || gen.generateCalls != defaultThumbTransientMediaMaxFailures {
+		t.Fatal("thumbnail retry limit was not enforced")
+	}
+	failed, err := cat.ListVideosByThumbnailStatus(ctx, video.DriveID, "failed", 100)
+	if err != nil || len(failed) != 1 {
+		t.Fatalf("exhausted thumbnail did not fail: %v, %v", failed, err)
+	}
 }
 
 func TestP115WAFStreamRateLimitKeepsPreviewPending(t *testing.T) {

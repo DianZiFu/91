@@ -1394,6 +1394,8 @@ func (a *App) registerPreviewWorkers(ctx context.Context, driveID string, worker
 }
 
 func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID string, worker *preview.Worker, thumbWorker *preview.ThumbWorker, fingerprintWorker *fingerprint.Worker, cancel context.CancelFunc, enqueue bool) {
+	gate := a.driveOperationGate(driveID)
+	backfillCtx := withDriveTaskAdmission(ctx, gate, gate.currentGeneration())
 	a.mu.Lock()
 	if a.cancels == nil {
 		a.cancels = make(map[string]context.CancelFunc)
@@ -1407,6 +1409,9 @@ func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID str
 	if a.fingerprintWorkers == nil {
 		a.fingerprintWorkers = make(map[string]*fingerprint.Worker)
 	}
+	if a.durationBackfills == nil {
+		a.durationBackfills = make(map[string]*driveDurationBackfill)
+	}
 	if old, ok := a.cancels[driveID]; ok && old != nil {
 		old()
 	}
@@ -1417,8 +1422,10 @@ func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID str
 	}
 	if thumbWorker != nil {
 		a.thumbWorkers[driveID] = thumbWorker
+		a.durationBackfills[driveID] = &driveDurationBackfill{ctx: backfillCtx, worker: thumbWorker}
 	} else {
 		delete(a.thumbWorkers, driveID)
+		delete(a.durationBackfills, driveID)
 	}
 	if fingerprintWorker != nil {
 		a.fingerprintWorkers[driveID] = fingerprintWorker
@@ -1436,9 +1443,6 @@ func (a *App) registerPreviewWorkersWithOptions(ctx context.Context, driveID str
 		return
 	}
 	a.scheduleDriveGenerationEnqueue(ctx, driveID, worker, thumbWorker)
-	if fingerprintWorker != nil {
-		go a.scheduleFingerprintBackfillWaiting(ctx, driveID, fingerprintWorker)
-	}
 }
 
 func (a *App) registerDriveTaskContext(
@@ -1660,8 +1664,12 @@ func (a *App) driveHasActiveWork(driveID string) bool {
 	previewWorker := a.workers[driveID]
 	thumbWorker := a.thumbWorkers[driveID]
 	fingerprintWorker := a.fingerprintWorkers[driveID]
+	durationBackfill := a.durationBackfills[driveID]
 	a.mu.Unlock()
 
+	if durationBackfill.busy() {
+		return true
+	}
 	if previewTaskBusy(thumbWorker.Status()) {
 		return true
 	}
@@ -1748,6 +1756,7 @@ func (a *App) resetDriveGenerationWorkers(ctx context.Context, driveID string) b
 	a.mu.Lock()
 	delete(a.workers, driveID)
 	delete(a.thumbWorkers, driveID)
+	delete(a.durationBackfills, driveID)
 	delete(a.fingerprintWorkers, driveID)
 	delete(a.cancels, driveID)
 	a.mu.Unlock()
@@ -1931,7 +1940,21 @@ func (a *App) scheduleDriveGenerationEnqueue(
 		if err := taskCtx.Err(); err != nil {
 			return
 		}
+		finishEnqueue := a.beginDriveResourceEnqueue(driveID)
+		defer finishEnqueue()
+		a.mu.Lock()
+		fingerprintWorker := a.fingerprintWorkers[driveID]
+		a.mu.Unlock()
+		// Independent queues must not delay one another under backpressure.
+		// Keep the shared task and duration handoff open until both producers exit.
+		var producers sync.WaitGroup
+		producers.Add(1)
+		go func() {
+			defer producers.Done()
+			a.enqueueFingerprintBackfill(taskCtx, driveID, fingerprintWorker)
+		}()
 		a.enqueueDriveGeneration(taskCtx, driveID, worker, thumbWorker)
+		producers.Wait()
 	}()
 }
 
@@ -2016,6 +2039,8 @@ func (a *App) enqueuePending(ctx context.Context, driveID string, w *preview.Wor
 }
 
 func (a *App) enqueueDriveGeneration(ctx context.Context, driveID string, worker *preview.Worker, thumbWorker *preview.ThumbWorker) {
+	finishEnqueue := a.beginDriveResourceEnqueue(driveID)
+	defer finishEnqueue()
 	// Thumbnail generation is independent of the global preview switch.
 	if thumbWorker != nil {
 		a.enqueueThumbnails(ctx, driveID, thumbWorker)
@@ -2040,10 +2065,10 @@ func (a *App) enqueueThumbnails(ctx context.Context, driveID string, w *preview.
 	if len(pending) == 0 {
 		return
 	}
-	log.Printf("[thumb] enqueue %d thumbnail/duration tasks for drive=%s", len(pending), driveID)
+	log.Printf("[thumb] enqueue %d thumbnail tasks for drive=%s", len(pending), driveID)
 	for _, v := range pending {
 		if !w.EnqueueBlocking(ctx, v) {
-			log.Printf("[thumb] enqueue thumbnail/duration tasks canceled for drive=%s", driveID)
+			log.Printf("[thumb] enqueue thumbnail tasks canceled for drive=%s", driveID)
 			return
 		}
 	}
@@ -2082,14 +2107,6 @@ func (a *App) scheduleFingerprintBackfill(ctx context.Context, driveID string, w
 	if !ok {
 		return
 	}
-	a.startFingerprintBackfill(taskCtx, driveID, w, done)
-}
-
-func (a *App) scheduleFingerprintBackfillWaiting(ctx context.Context, driveID string, w *fingerprint.Worker) {
-	if w == nil {
-		return
-	}
-	taskCtx, done := a.registerDriveTaskContextWaiting(ctx, driveID, 0)
 	a.startFingerprintBackfill(taskCtx, driveID, w, done)
 }
 
@@ -2160,6 +2177,8 @@ func (a *App) enqueueFingerprints(ctx context.Context, driveID string, w *finger
 	if len(pending) == 0 {
 		return
 	}
+	finishEnqueue := a.beginDriveResourceEnqueue(driveID)
+	defer finishEnqueue()
 	log.Printf("[fingerprint] enqueue %d videos for drive=%s", len(pending), driveID)
 	for _, v := range pending {
 		if !w.EnqueueBlocking(ctx, v) {
@@ -2199,6 +2218,7 @@ func (a *App) retireDriveRuntime(id string) {
 	}
 	delete(a.workers, id)
 	delete(a.thumbWorkers, id)
+	delete(a.durationBackfills, id)
 	delete(a.fingerprintWorkers, id)
 	delete(a.scriptCrawlers, id)
 	a.mu.Unlock()

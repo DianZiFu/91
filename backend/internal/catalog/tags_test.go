@@ -12,7 +12,7 @@ import (
 	"github.com/video-site/backend/internal/tagging"
 )
 
-func TestListVideosNeedingThumbnailIncludesExistingThumbnailMissingDuration(t *testing.T) {
+func TestListVideosNeedingThumbnailExcludesDurationOnlyWork(t *testing.T) {
 	ctx := context.Background()
 	cat, err := Open(t.TempDir() + "/catalog.db")
 	if err != nil {
@@ -80,19 +80,19 @@ func TestListVideosNeedingThumbnailIncludesExistingThumbnailMissingDuration(t *t
 	if err != nil {
 		t.Fatalf("list videos needing thumbnail: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("items = %#v, want duration-only and missing-thumb", items)
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want only missing-thumb", items)
 	}
-	if items[0].ID != "duration-only" || items[1].ID != "missing-thumb" {
-		t.Fatalf("item ids = %q, %q; want duration-only, missing-thumb", items[0].ID, items[1].ID)
+	if items[0].ID != "missing-thumb" {
+		t.Fatalf("item id = %q, want missing-thumb", items[0].ID)
 	}
 
 	count, err := cat.CountVideosNeedingThumbnail(ctx, "drive")
 	if err != nil {
 		t.Fatalf("count videos needing thumbnail: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("count = %d, want 2", count)
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
 	}
 
 	stats, err := cat.CountDriveAssetStats(ctx)
@@ -103,22 +103,22 @@ func TestListVideosNeedingThumbnailIncludesExistingThumbnailMissingDuration(t *t
 		t.Fatalf("thumbnail counts = %#v, want ready=2 pending=1 failed=1 durationPending=1", got)
 	}
 
-	if err := cat.UpdateVideoMeta(ctx, "duration-only", VideoMetaPatch{ThumbnailStatus: "skipped"}); err != nil {
-		t.Fatalf("mark duration-only skipped: %v", err)
+	if err := cat.UpdateVideoMeta(ctx, "duration-only", VideoMetaPatch{DurationSeconds: 19}); err != nil {
+		t.Fatalf("complete duration backfill: %v", err)
 	}
 	count, err = cat.CountVideosNeedingThumbnail(ctx, "drive")
 	if err != nil {
-		t.Fatalf("count videos needing thumbnail after skip: %v", err)
+		t.Fatalf("count videos needing thumbnail after backfill: %v", err)
 	}
 	if count != 1 {
-		t.Fatalf("count after skip = %d, want 1", count)
+		t.Fatalf("count after backfill = %d, want 1", count)
 	}
 	stats, err = cat.CountDriveAssetStats(ctx)
 	if err != nil {
-		t.Fatalf("count drive asset stats after skip: %v", err)
+		t.Fatalf("count drive asset stats after backfill: %v", err)
 	}
 	if got := stats.Thumbnails["drive"]; got.Ready != 2 || got.Pending != 1 || got.Failed != 1 || got.DurationPending != 0 {
-		t.Fatalf("thumbnail counts after skip = %#v, want ready=2 pending=1 failed=1 durationPending=0", got)
+		t.Fatalf("thumbnail counts after backfill = %#v, want ready=2 pending=1 failed=1 durationPending=0", got)
 	}
 }
 

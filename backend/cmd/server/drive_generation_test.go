@@ -87,6 +87,22 @@ func TestDriveGenerationRequestReportsReadyWithoutRequeueingCompletedResources(t
 	}
 }
 
+func TestDriveGenerationRequestKeepsExistingThumbnailReadyWithMissingDuration(t *testing.T) {
+	ctx := context.Background()
+	app := newGenerationRequestApp(t)
+	video := seedGenerationRequestVideo(t, app, "duration-only", "ready")
+	if err := app.cat.UpdateVideoMeta(ctx, video.ID, catalog.VideoMetaPatch{DurationSecondsSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.requestDriveGeneration(ctx, ctx, video.DriveID, api.DriveGenerationThumbnails)
+	if err != nil || result.State != "ready" {
+		t.Fatalf("missing duration made ready covers fail: %+v, %v", result, err)
+	}
+	if app.thumbWorkers[video.DriveID].Status().QueueLength != 0 {
+		t.Fatal("cover generation admitted duration-only work")
+	}
+}
+
 func TestDriveGenerationRequestResumesPendingAndFailedResourcesOfOnlyItsKind(t *testing.T) {
 	for _, kind := range generationTestKinds {
 		t.Run(string(kind), func(t *testing.T) {

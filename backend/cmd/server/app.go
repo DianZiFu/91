@@ -27,6 +27,8 @@ type App struct {
 	workers            map[string]*preview.Worker
 	thumbWorkers       map[string]*preview.ThumbWorker
 	fingerprintWorkers map[string]*fingerprint.Worker
+	// Each drive completes missing metadata after its own generation queues drain.
+	durationBackfills map[string]*driveDurationBackfill
 	// Shared for the lifetime of the app, including drive remounts.
 	generationLimitsOnce sync.Once
 	thumbnailLimiter     *tasklimit.Limiter

@@ -104,6 +104,8 @@ func (a *App) regenerateDriveResources(ctx context.Context, driveID string, kind
 		return
 	}
 	defer done()
+	finishEnqueue := a.beginDriveResourceEnqueue(driveID)
+	defer finishEnqueue()
 	work, err := a.driveGenerationWork(driveID, kind)
 	if err != nil {
 		log.Printf("[generation] prepare drive=%s kind=%s: %v", driveID, kind, err)
@@ -191,7 +193,7 @@ func (a *App) requestDriveGeneration(reqCtx, runCtx context.Context, driveID str
 		switch kind {
 		case api.DriveGenerationThumbnails:
 			counts := stats.Thumbnails[driveID]
-			remaining = counts.Pending + counts.Failed + counts.DurationPending
+			remaining = counts.Pending + counts.Failed
 		case api.DriveGenerationPreviews:
 			counts := stats.Teasers[driveID]
 			remaining = counts.Pending + counts.Failed
@@ -202,11 +204,14 @@ func (a *App) requestDriveGeneration(reqCtx, runCtx context.Context, driveID str
 		if remaining > 0 {
 			return api.DriveGenerationResult{}, fmt.Errorf("%s资源尚未就绪，但当前没有可生成的项目", label)
 		}
+		a.scheduleDriveDurationBackfill(driveID)
 		return api.DriveGenerationResult{State: "ready", Message: label + "已全部就绪"}, nil
 	}
 	started = true
 	go func() {
 		defer finish()
+		finishEnqueue := a.beginDriveResourceEnqueue(driveID)
+		defer finishEnqueue()
 		enqueueDriveGenerationWork(taskCtx, driveID, kind, work, items)
 	}()
 	return api.DriveGenerationResult{State: "started", Message: "已触发" + label + "生成"}, nil

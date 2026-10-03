@@ -51,6 +51,9 @@ func (c *Catalog) migrate(ctx context.Context) error {
 	if err := c.addColumnIfMissing(ctx, "videos", "thumbnail_failures", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := c.migrateLegacyDurationBackfill(ctx); err != nil {
+		return err
+	}
 	if err := c.addColumnIfMissing(ctx, "videos", "thumbnail_updated_at", "INTEGER DEFAULT 0"); err != nil {
 		return err
 	}

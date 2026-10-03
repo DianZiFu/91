@@ -8,6 +8,7 @@
 //	Phase 1: concurrently for each non-crawler cloud drive
 //	           scan + delete-detection + enqueue thumb + enqueue preview video
 //	         wait for all scans, then all thumb / preview-video queues to be idle
+//	         each drive backfills missing durations after its resource queues drain
 //	Phase 1b: reconcile generated thumbnails/previews against local storage
 //	          enqueue repaired pending rows and wait for their queues to drain
 //	Phase 1c: upload Telegram local videos to their configured cloud drive
@@ -611,21 +612,24 @@ func (r *Runner) runPipeline(ctx context.Context) {
 	}
 	if len(crawlerIDs) == 0 {
 		log.Printf("[nightly] crawler phase skipped: no crawler configured")
-		r.runDedupeAssetCleanupPhase(ctx, "nightly", "dedupe")
+	} else {
+		log.Printf("[nightly] phase 2: crawling %d crawler drive(s)", len(crawlerIDs))
+		for _, id := range crawlerIDs {
+			if ctx.Err() != nil {
+				log.Printf("[nightly] phase 2 aborted by ctx: %v", ctx.Err())
+				return
+			}
+			log.Printf("[nightly] phase 2: crawling drive=%s", id)
+			if err := r.cfg.RunCrawlerCrawl(ctx, id); err != nil {
+				r.recordIssue("crawl", fmt.Errorf("crawler %s: %w", id, err))
+			}
+		}
+	}
+	// Uploads and restoration can admit more resource generation. Its per-drive
+	// duration backfill must also finish before duplicate maintenance reads it.
+	if err := r.waitIdle(ctx, "nightly", "generation completion"); err != nil {
 		return
 	}
-	log.Printf("[nightly] phase 2: crawling %d crawler drive(s)", len(crawlerIDs))
-	for _, id := range crawlerIDs {
-		if ctx.Err() != nil {
-			log.Printf("[nightly] phase 2 aborted by ctx: %v", ctx.Err())
-			return
-		}
-		log.Printf("[nightly] phase 2: crawling drive=%s", id)
-		if err := r.cfg.RunCrawlerCrawl(ctx, id); err != nil {
-			r.recordIssue("crawl", fmt.Errorf("crawler %s: %w", id, err))
-		}
-	}
-
 	r.runDedupeAssetCleanupPhase(ctx, "nightly", "dedupe")
 }
 

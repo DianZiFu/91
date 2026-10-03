@@ -322,6 +322,7 @@ func TestRunPipelineHonoursPhaseOrder(t *testing.T) {
 		"wait-idle", // after repaired local assets are admitted
 		"list-crawler",
 		"crawl:sp-1",
+		"wait-idle", // after uploads and restored videos, including drive metadata
 		"dedupe-cleanup",
 	}
 	if len(got) != len(want) {
@@ -359,7 +360,7 @@ func TestRunPipelineReconcilesLocalAssetsWithoutScanTargets(t *testing.T) {
 	r.runPipeline(context.Background())
 
 	got := rec.snapshot()
-	want := []string{"wait-idle", "asset-reconciliation", "dedupe-cleanup"}
+	want := []string{"wait-idle", "asset-reconciliation", "wait-idle", "dedupe-cleanup"}
 	if len(got) != len(want) {
 		t.Fatalf("call sequence len = %d, want %d; got=%v", len(got), len(want), got)
 	}
@@ -367,6 +368,59 @@ func TestRunPipelineReconcilesLocalAssetsWithoutScanTargets(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("call[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
 		}
+	}
+}
+
+func TestUploadedResourcesCompleteBeforeDuplicateMaintenance(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	uploaded := false
+	waiting := make(chan struct{})
+	completed := make(chan struct{})
+	deduped := make(chan struct{})
+	r := New(Config{
+		Settings: newStubSettings(),
+		RunTelegramUpload: func(context.Context) error {
+			uploaded = true
+			return nil
+		},
+		WaitPreviewQueuesIdle: func(ctx context.Context) error {
+			if !uploaded {
+				return nil
+			}
+			close(waiting)
+			select {
+			case <-completed:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+		RunDedupeAssetCleanup: func(context.Context) error { close(deduped); return nil },
+	})
+	done := make(chan struct{})
+	go func() { defer close(done); r.runPipeline(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-waiting:
+	case <-ctx.Done():
+		t.Fatal("uploaded resource completion was not awaited")
+	}
+	select {
+	case <-deduped:
+		t.Fatal("dedupe ran before uploaded resources and duration backfill completed")
+	default:
+	}
+	close(completed)
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("pipeline did not finish")
+	}
+	select {
+	case <-deduped:
+	default:
+		t.Fatal("dedupe did not follow resource completion")
 	}
 }
 

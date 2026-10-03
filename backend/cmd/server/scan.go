@@ -236,6 +236,8 @@ func (a *App) runScanWithTaskContext(ctx context.Context, driveID string) (repor
 			return report
 		}
 	}
+	finishEnqueue := a.beginDriveResourceEnqueue(driveID)
+	defer finishEnqueue()
 	enqueueNewScanVideos(result.NewVideos, thumbnailWorker, fingerprintWorker)
 	a.enqueueFingerprintBackfill(ctx, driveID, fingerprintWorker)
 	a.enqueueDriveGeneration(ctx, driveID, previewWorker, thumbnailWorker)

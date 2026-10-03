@@ -1108,10 +1108,8 @@ func (c *Catalog) ResetMissingLocalPreviews(ctx context.Context, references []Lo
 	return reset, nil
 }
 
-// ListVideosNeedingThumbnail returns videos that still need thumbnail-worker work.
-// Besides missing thumbnails, this includes videos with an existing thumbnail but
-// missing duration metadata, because the thumbnail worker probes duration while
-// it already has a stream link.
+// ListVideosNeedingThumbnail only admits missing covers. Remaining missing
+// durations are processed after this drive finishes its resource generation.
 // Failed thumbnails are reported separately and should not block preview-video generation.
 // Videos whose local assets were cleared because they are fingerprint duplicates
 // stay pending in the DB, but uniqueVideoWhereSQL keeps them out of this queue
@@ -1123,10 +1121,7 @@ func (c *Catalog) ListVideosNeedingThumbnail(ctx context.Context, driveID string
 	rows, err := c.db.QueryContext(ctx,
 		`SELECT `+allVideoCols+` FROM videos
 		 WHERE drive_id = ?
-		   AND (
-		        COALESCE(thumbnail_url, '') = ''
-		        OR COALESCE(duration_seconds, 0) <= 0
-		   )
+		   AND COALESCE(thumbnail_url, '') = ''
 		   AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped')
 		   AND COALESCE(hidden, 0) = 0
 		   AND `+uniqueVideoWhereSQL+`
@@ -1153,10 +1148,7 @@ func (c *Catalog) CountVideosNeedingThumbnail(ctx context.Context, driveID strin
 	err := c.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM videos
 		 WHERE drive_id = ?
-		   AND (
-		        COALESCE(thumbnail_url, '') = ''
-		        OR COALESCE(duration_seconds, 0) <= 0
-		   )
+		   AND COALESCE(thumbnail_url, '') = ''
 		   AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped')
 		   AND COALESCE(hidden, 0) = 0
 		   AND `+uniqueVideoWhereSQL,
@@ -3249,8 +3241,7 @@ func (c *Catalog) countDriveAssetStats(ctx context.Context, driveID string) (Dri
 		                     AND COALESCE(thumbnail_status, 'pending') = 'failed' THEN 1 END) AS thumbnail_failed_count,
 		        COUNT(CASE WHEN is_canonical = 1
 		                     AND COALESCE(thumbnail_url, '') != ''
-		                     AND COALESCE(duration_seconds, 0) <= 0
-		                     AND COALESCE(thumbnail_status, 'pending') NOT IN ('failed', 'skipped') THEN 1 END) AS duration_pending_count,
+		                     AND COALESCE(duration_seconds, 0) <= 0 THEN 1 END) AS duration_pending_count,
 		        COUNT(CASE WHEN COALESCE(sampled_sha256, '') != ''
 		                      OR COALESCE(fingerprint_status, 'pending') = 'ready' THEN 1 END) AS ready_count,
 		        COUNT(CASE WHEN size_bytes > 0

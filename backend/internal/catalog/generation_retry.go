@@ -50,7 +50,7 @@ func (c *Catalog) ResetFailedGeneration(ctx context.Context, driveID string, kin
 			query: `UPDATE videos
 			   SET thumbnail_status = 'pending', thumbnail_failures = 0, updated_at = ?
 			 WHERE drive_id = ? AND thumbnail_status = 'failed'
-			   AND (COALESCE(thumbnail_url, '') = '' OR COALESCE(duration_seconds, 0) <= 0)
+			   AND COALESCE(thumbnail_url, '') = ''
 			   AND COALESCE(hidden, 0) = 0 AND ` + uniqueVideoWhereSQL,
 		},
 		{
