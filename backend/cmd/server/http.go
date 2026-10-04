@@ -79,6 +79,10 @@ type capturedLogEntry struct {
 }
 
 func (e *capturedLogEntry) Write(status, bytes int, header http.Header, elapsed time.Duration, extra any) {
+	level := requestLogLevel(e.request, status, elapsed)
+	if level == "" {
+		return
+	}
 	// Keep the human-readable operational stream independently of file logging.
 	e.LogEntry.Write(status, bytes, header, elapsed, extra)
 	if e.logs == nil || e.request == nil {
@@ -112,6 +116,7 @@ func (e *capturedLogEntry) Write(status, bytes int, header http.Header, elapsed 
 	_ = e.logs.AppendEntry(applog.Entry{
 		Timestamp: time.Now(),
 		Source:    applog.SourceHTTP,
+		Level:     level,
 		Method:    applog.Method(e.request.Method),
 		Status:    status,
 		Path:      target,
@@ -137,8 +142,8 @@ func (e *capturedLogEntry) Panic(value any, stack []byte) {
 }
 
 // requestLogMiddleware writes a human-readable access line to stdout and a
-// structured durable entry for the admin viewer. The viewer endpoint itself is
-// omitted so polling cannot generate self-referential log traffic.
+// structured durable entry for the admin viewer. Routine queries are filtered
+// after completion so failures and slow responses remain observable.
 func requestLogMiddleware(accessLogger, panicLogger *log.Logger, logs *applog.Store) func(http.Handler) http.Handler {
 	requestLogger := middleware.RequestLogger(&capturedLogFormatter{
 		access: &middleware.DefaultLogFormatter{
@@ -155,10 +160,6 @@ func requestLogMiddleware(accessLogger, panicLogger *log.Logger, logs *applog.St
 			ctx := context.WithValue(r.Context(), middleware.RequestIDKey, requestID)
 			r = r.WithContext(applog.WithFields(ctx, applog.Fields{RequestID: requestID}))
 			w.Header().Set("X-Request-ID", requestID)
-			if r.Method == http.MethodGet && r.URL.Path == "/admin/api/logs" {
-				next.ServeHTTP(w, r)
-				return
-			}
 			logged.ServeHTTP(w, r)
 		})
 	}

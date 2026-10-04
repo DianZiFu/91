@@ -129,7 +129,7 @@ test("admin log viewer is reachable from the authenticated admin layout", () => 
   assert.match(logsPageSource, /warning: "WARN"/);
   assert.match(logsPageSource, /error: "ERROR"/);
   assert.equal((logsPageSource.match(/label: "ALL"/g) ?? []).length, 3);
-  assert.match(logsPageSource, /\{ value: "http", label: "访问日志" \}/);
+  assert.match(logsPageSource, /\{ value: "http", label: "访问" \}/);
   assert.doesNotMatch(logsPageSource, /HTTP 访问/);
   assert.match(
     logsPageSource,
