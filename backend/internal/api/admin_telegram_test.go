@@ -106,7 +106,7 @@ func TestTelegramAdminRoutesRejectAnonymousAndViewers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, route := range []struct{ method, path string }{
-		{"GET", "/config.yaml"}, {"PUT", "/config.yaml"}, {"GET", "/telegram/status"}, {"POST", "/telegram/test"}, {"POST", "/telegram/prepare-polling"}, {"POST", "/telegram/resume"},
+		{"GET", "/config.yaml"}, {"PUT", "/config.yaml"}, {"GET", "/telegram/availability"}, {"GET", "/telegram/status"}, {"POST", "/telegram/test"}, {"POST", "/telegram/prepare-polling"}, {"POST", "/telegram/resume"},
 		{"GET", "/import-jobs"}, {"POST", "/import-jobs/job/cancel"}, {"POST", "/import-jobs/job/retry"},
 	} {
 		for _, viewer := range []bool{false, true} {

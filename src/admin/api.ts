@@ -1576,6 +1576,7 @@ export type ImportJob = {
   cancelRequested?: boolean; sequence: string; senderId?: string;
   retryCount: number; nextAttempt: number;
 };
+export const getTelegramAvailability = (signal?: AbortSignal) => request<{ enabled: boolean }>("/telegram/availability", { signal });
 export const getTelegramStatus = (signal?: AbortSignal) => request<TelegramStatus>("/telegram/status", { signal });
 export const testTelegram = () => request<{username: string}>("/telegram/test", {method: "POST"});
 export const prepareTelegramPolling = () => request<void>("/telegram/prepare-polling", {method:"POST"});

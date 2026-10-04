@@ -345,12 +345,21 @@ export function BackupPage() {
   const restoreConfirmationStartedAt = useRef<number | null>(null);
 
   const pollingActive = routeActive && !restoring;
-  const backups = useAdminResource<api.BackupList | null>(api.listBackups,
-    { queryKey: "backups", active: pollingActive, intervalMs: restoreSubmitting ? 500 : 2000, initialData: null, onUnauthorized: invalidateSession });
-  const outgoing = useAdminResource(api.listBackupTransfers,
-    { queryKey: "backup-transfers", active: pollingActive, intervalMs: 2000, initialData: [], onUnauthorized: invalidateSession });
-  const incoming = useAdminResource(api.listBackupReceiveTransfers,
-    { queryKey: "backup-receives", active: pollingActive, intervalMs: 2000, initialData: [], onUnauthorized: invalidateSession });
+  const backups = useAdminResource<api.BackupList | null>(api.listBackups, {
+    queryKey: "backups", active: pollingActive, initialData: null, onUnauthorized: invalidateSession,
+    intervalMs: (data) => {
+      if (restoreSubmitting) return 500;
+      return taskActive(data?.current) || data?.pendingRestore || data?.restoreProgress ? 2000 : 15_000;
+    },
+  });
+  const outgoing = useAdminResource(api.listBackupTransfers, {
+    queryKey: "backup-transfers", active: pollingActive, initialData: [], onUnauthorized: invalidateSession,
+    intervalMs: (items) => items.some(transferActive) ? 2000 : 15_000,
+  });
+  const incoming = useAdminResource(api.listBackupReceiveTransfers, {
+    queryKey: "backup-receives", active: pollingActive, initialData: [], onUnauthorized: invalidateSession,
+    intervalMs: (items) => items.some(receiveTransferActive) ? 2000 : 15_000,
+  });
   const { data, setData, loading } = backups;
   const transfers = outgoing.data;
   const { data: receiveTransfers, setData: setReceiveTransfers } = incoming;

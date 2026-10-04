@@ -85,12 +85,6 @@ export const emptyForm: FormState = {
   creds: {},
 };
 
-export const idleMaintenanceStatus = {
-  state: "idle" as const,
-  running: false,
-  queued: false,
-};
-
 export function scanAllButtonText(status: { running: boolean; queued: boolean }, triggering: boolean) {
   if (triggering) return "触发中...";
   if (status.running) return "扫描运行中";

@@ -11,6 +11,13 @@ import (
 	"github.com/video-site/backend/internal/catalog"
 )
 
+func (a *AdminServer) handleTelegramAvailability(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]bool{
+		"enabled": a.ConfigManager.LiveSettings().TelegramEnabled,
+	})
+}
+
 func (a *AdminServer) handleTelegramStatus(w http.ResponseWriter, r *http.Request) {
 	if a.Telegram == nil {
 		http.Error(w, "Telegram 服务未配置", http.StatusServiceUnavailable)

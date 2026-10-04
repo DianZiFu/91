@@ -28,6 +28,8 @@ export class AdminResource<T> {
   private reading = false;
   private failures = 0;
   private interval: number | null = null;
+  private retryOnError = true;
+  private maxRetries = Infinity;
 
   constructor(public load: (signal: AbortSignal) => Promise<T>, initialData: T) {
     this.state = { data: initialData, ready: false, loading: true, refreshing: false, error: "", failure: null, unauthorized: false };
@@ -57,6 +59,13 @@ export class AdminResource<T> {
   setInterval(interval: number | null) {
     if (this.interval === interval) return;
     this.interval = interval;
+    this.schedule();
+  }
+
+  setRetryOnError(enabled: boolean, maxRetries = Infinity) {
+    if (this.retryOnError === enabled && this.maxRetries === maxRetries) return;
+    this.retryOnError = enabled;
+    this.maxRetries = maxRetries;
     this.schedule();
   }
 
@@ -110,7 +119,7 @@ export class AdminResource<T> {
     if (!this.active || this.reading || this.state.unauthorized) return;
     let delay = this.interval;
     if (this.state.failure) {
-      if (!retryable(this.state.failure)) return;
+      if (!this.retryOnError || this.failures > this.maxRetries || !retryable(this.state.failure)) return;
       delay = Math.min(30_000, (this.interval ?? 1000) * 2 ** Math.min(this.failures, 5));
     }
     if (delay !== null) this.timer = setTimeout(() => { void this.refresh(); }, delay);

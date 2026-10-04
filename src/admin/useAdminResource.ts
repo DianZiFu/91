@@ -5,6 +5,8 @@ type ResourceOptions<T> = {
   queryKey?: string;
   active: boolean;
   intervalMs: number | null | ((data: T) => number | null);
+  retryOnError?: boolean;
+  maxRetries?: number;
   initialData: T;
   onUnauthorized?: () => void;
 };
@@ -17,6 +19,7 @@ export function useAdminResource<T>(load: (signal: AbortSignal) => Promise<T>, o
   const interval = typeof options.intervalMs === "function" ? options.intervalMs(state.data) : options.intervalMs;
 
   useEffect(() => { resource.setInterval(interval); }, [resource, interval]);
+  useEffect(() => { resource.setRetryOnError(options.retryOnError ?? true, options.maxRetries); }, [resource, options.retryOnError, options.maxRetries]);
   useEffect(() => {
     if (!options.active) return;
     const resume = () => { if (document.hidden) resource.pause(); else resource.resume(); };

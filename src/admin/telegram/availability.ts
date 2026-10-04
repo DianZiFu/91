@@ -38,6 +38,10 @@ export function resetTelegramAvailability() {
   publish({ enabled: null, error: "" });
 }
 
+export function reportTelegramAvailabilityError() {
+  publish({ ...snapshot, error: "无法读取 Telegram 配置状态，请刷新重试。" });
+}
+
 export async function syncTelegramAvailability(
   fetchEnabled: () => Promise<boolean>,
   signal: AbortSignal,
@@ -45,12 +49,12 @@ export async function syncTelegramAvailability(
   const requestRevision = ++revision;
   try {
     const enabled = await fetchEnabled();
-    if (signal.aborted || requestRevision !== revision) return;
     if (typeof enabled !== "boolean")
       throw new Error("无效的 Telegram 配置状态");
-    publish({ enabled, error: "" });
-  } catch {
-    if (signal.aborted || requestRevision !== revision) return;
-    publish({ ...snapshot, error: "无法读取 Telegram 配置状态，请刷新重试。" });
+    if (!signal.aborted && requestRevision === revision) publish({ enabled, error: "" });
+    return enabled;
+  } catch (error) {
+    if (!signal.aborted && requestRevision === revision) reportTelegramAvailabilityError();
+    throw error;
   }
 }

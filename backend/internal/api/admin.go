@@ -320,6 +320,7 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Delete("/banned-ips/{ip}", a.handleUnbanIP)
 
 			// 配置文件与其它独立设置
+			r.Get("/telegram/availability", a.handleTelegramAvailability)
 			r.Get("/telegram/status", a.handleTelegramStatus)
 			r.Post("/telegram/test", a.handleTelegramTest)
 			r.Post("/telegram/prepare-polling", a.handleTelegramPrepare)

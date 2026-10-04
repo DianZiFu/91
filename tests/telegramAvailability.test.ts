@@ -84,11 +84,11 @@ test("status failures show an error without interpreting them as disabled", asyn
   const fail = async (): Promise<boolean> => {
     throw new Error("offline");
   };
-  await syncTelegramAvailability(fail, signal());
+  await assert.rejects(syncTelegramAvailability(fail, signal()));
   assert.equal(getTelegramAvailability().enabled, null);
   assert.ok(getTelegramAvailability().error);
   applyTelegramEnabled(true);
-  await syncTelegramAvailability(fail, signal());
+  await assert.rejects(syncTelegramAvailability(fail, signal()));
   assert.equal(getTelegramAvailability().enabled, true);
   await syncTelegramAvailability(async () => false, signal());
   assert.deepEqual(getTelegramAvailability(), { enabled: false, error: "" });

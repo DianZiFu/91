@@ -47,13 +47,14 @@ export function CrawlersPage() {
   const routeActive = useAdminRouteActive();
   const { invalidateSession } = useAuth();
   const maintenance = useAdminResource<api.MaintenanceJobStatus | null>(api.getScanAllJobStatus,
-    { queryKey: "maintenance", active: routeActive, intervalMs: POLL_INTERVAL_MS, initialData: null, onUnauthorized: invalidateSession });
+    { queryKey: "maintenance", active: routeActive, initialData: null, onUnauthorized: invalidateSession,
+      intervalMs: (status) => status?.running || status?.queued ? POLL_INTERVAL_MS : 15_000 });
   const maintenanceBusy = Boolean(maintenance.data?.running || maintenance.data?.queued);
   const crawlers = useAdminResource(api.listCrawlers, {
     queryKey: "crawlers", active: routeActive, initialData: [], onUnauthorized: invalidateSession,
     intervalMs: (items) => maintenanceBusy || items.some(crawlerBusy) ? POLL_INTERVAL_MS : 15_000,
   });
-  const drives = useAdminResource(api.listDrives, { queryKey: "crawler-upload-targets", active: routeActive, intervalMs: 15_000, initialData: [], onUnauthorized: invalidateSession });
+  const drives = useAdminResource(api.listDrives, { queryKey: "crawler-upload-targets", active: routeActive, intervalMs: null, initialData: [], onUnauthorized: invalidateSession });
   const { data: list, setData: setList, loading, invalidate: refresh } = crawlers;
   const uploadTargets = drives.data.filter((drive) => drive.canUpload);
   const [detailTargetId, setDetailTargetId] = useState("");

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -11,6 +12,39 @@ import (
 	"github.com/video-site/backend/internal/config"
 	"github.com/video-site/backend/internal/telegram"
 )
+
+func TestTelegramAvailabilityReadsSavedConfigWithoutRuntimeService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := config.NewManager(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &AdminServer{ConfigManager: manager}
+	for _, enabled := range []bool{true, false} {
+		body := "telegram: {enabled: false}\n"
+		if enabled {
+			body = "telegram: {enabled: true, bot_token: '123:private_token'}\n"
+		}
+		if _, err := manager.ReplaceYAML([]byte(body), ""); err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		server.handleTelegramAvailability(response, httptest.NewRequest(http.MethodGet, "/admin/api/telegram/availability", nil))
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("response = %d, headers=%v", response.Code, response.Header())
+		}
+		var availability map[string]bool
+		if err := json.Unmarshal(response.Body.Bytes(), &availability); err != nil {
+			t.Fatal(err)
+		}
+		if len(availability) != 1 || availability["enabled"] != enabled {
+			t.Fatalf("availability = %v, want enabled=%v only", availability, enabled)
+		}
+	}
+}
 
 func TestTelegramSettingsUseSharedYAMLAPI(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
